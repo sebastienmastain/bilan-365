@@ -1,5 +1,5 @@
 ﻿<#PSScriptInfo
-.VERSION 1.1.0
+.VERSION 1.2.0
 .GUID 25ee63a4-b719-4f3c-a76b-7151bb4487ff
 .AUTHOR Pactio
 .COMPANYNAME Pactio
@@ -7,7 +7,7 @@
 .TAGS Microsoft365 M365 Intune Entra Audit Security Bilan French Sysadmin MSP
 .PROJECTURI https://github.com/sebastienmastain/bilan-365
 .REQUIREDMODULES Microsoft.Graph.Authentication
-.RELEASENOTES 1.1.0 - première version publique.
+.RELEASENOTES 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32 sur r/Sysadmin_Fr). 1.1.0 - première version publique.
 #>
 
 <#
@@ -23,13 +23,14 @@
     Vérifie : administrateurs généraux, double authentification (admins compris), paramètres de
     sécurité par défaut ou accès conditionnel, comptes inactifs, invités, inscription automatique
     dans Intune, utilisateurs administrateurs de leur PC, LAPS, chiffrement BitLocker, conformité
-    et synchronisation des PC, règle de conformité, mises à jour Windows pilotées, licences libres.
+    et synchronisation des PC, règle de conformité, mises à jour Windows pilotées, licences libres,
+    licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé.
 
 .PARAMETER Compte
     Compte administrateur du tenant (ex. admin@entreprise.fr). Sans ce paramètre, une fenêtre le demande.
 
 .NOTES
-    Pactio · Bilan 365 — v1.1.0 (gratuit)
+    Pactio · Bilan 365 — v1.2.0 (gratuit)
     Prérequis : Windows 10 / 11, PowerShell 5.1. Le module Microsoft.Graph.Authentication est
                 installé automatiquement pour l'utilisateur s'il manque.
     Droits    : un compte administrateur du tenant ; Microsoft demande d'accepter des droits de
@@ -69,7 +70,7 @@ if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
 }
 Import-Module Microsoft.Graph.Authentication
 $Droits = @("Directory.Read.All", "AuditLog.Read.All", "Policy.Read.All", "Policy.Read.DeviceConfiguration",
-            "DeviceManagementManagedDevices.Read.All", "DeviceManagementConfiguration.Read.All", "DeviceLocalCredential.ReadBasic.All")
+            "DeviceManagementManagedDevices.Read.All", "DeviceManagementConfiguration.Read.All", "DeviceLocalCredential.ReadBasic.All", "Reports.Read.All")
 Write-Host "Connexion : choisissez le compte $Compte (la fenêtre Microsoft peut être cachée : Alt+Tab)." -ForegroundColor Cyan
 Connect-MgGraph -TenantId $Domaine -Scopes $Droits -NoWelcome
 $Ctx = Get-MgContext
@@ -231,6 +232,41 @@ try {
     else { Ajouter "Licences" "Licences payées non attribuées" "OK" "aucune licence libre" }
 } catch { Ajouter "Licences" "Licences payées non attribuées" "GRIS" (Raison $_) }
 
+# ---- 10. Licences en dépassement / abonnements en alerte
+try {
+    if (-not (Get-Command NomLicence -ErrorAction SilentlyContinue)) { function script:NomLicence([string]$P) { $P } }
+    if (-not $Skus) { $Skus = Lire-Tout "$G1/subscribedSkus?`$select=skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus" }
+    $Pb = @()
+    foreach ($S in $Skus) {
+        $Nom = NomLicence $S.skuPartNumber
+        $Ach = [int]$S.prepaidUnits.enabled; $Uti = [int]$S.consumedUnits
+        $Av = [int]$S.prepaidUnits.warning; $Su = [int]$S.prepaidUnits.suspended
+        if ($Uti -gt ($Ach + $Av + $Su) -and ($Ach + $Av + $Su) -gt 0) { $Pb += "$Nom : $Uti attribuée(s) pour $($Ach + $Av + $Su) achetée(s) (dépassement de $($Uti - $Ach - $Av - $Su))" }
+        if ($Av -gt 0) { $Pb += "$Nom : $Av licence(s) en période de grâce (abonnement expiré ou non renouvelé)" }
+        if ($Su -gt 0) { $Pb += "$Nom : $Su licence(s) suspendue(s) (bientôt supprimées)" }
+    }
+    if ($Pb.Count) { Ajouter "Licences" "Licences en dépassement ou en alerte" "ROUGE" "$($Pb.Count) problème(s) de licences" "Des utilisateurs risquent de perdre l'accès à leur messagerie ou à leurs fichiers : vérifier la facturation dans le centre d'administration." $Pb }
+    else { Ajouter "Licences" "Licences en dépassement ou en alerte" "OK" "aucun dépassement, aucun abonnement en alerte" }
+} catch { Ajouter "Licences" "Licences en dépassement ou en alerte" "GRIS" (Raison $_) }
+
+# ---- 11. Stockage SharePoint + OneDrive utilisé
+function Taille([double]$O) { if ($O -ge 1TB) { "{0:N2} To" -f ($O / 1TB) } elseif ($O -ge 1GB) { "{0:N1} Go" -f ($O / 1GB) } else { "{0:N0} Mo" -f ($O / 1MB) } }
+function Dernier-Stockage([string]$Rapport) {
+    $R = Lire "$GB/reports/$Rapport(period='D7')?`$format=application/json"
+    $L = @($R.value | Where-Object { $_.storageUsedInBytes -ne $null } | Sort-Object { [datetime]$_.reportDate } -Descending)
+    if (-not $L.Count) { return $null }
+    return $L[0]
+}
+try {
+    $SP = Dernier-Stockage "getSharePointSiteUsageStorage"; $OD = Dernier-Stockage "getOneDriveUsageStorage"
+    if (-not $SP -and -not $OD) { Ajouter "Stockage" "Stockage SharePoint + OneDrive" "GRIS" "aucune donnée de stockage (tenant récent : Microsoft met 2 à 3 jours à les produire)" }
+    else {
+        $OSP = if ($SP) { [double]$SP.storageUsedInBytes } else { 0 }; $OOD = if ($OD) { [double]$OD.storageUsedInBytes } else { 0 }
+        $Date = if ($SP) { ([datetime]$SP.reportDate).ToString('dd/MM/yyyy') } else { ([datetime]$OD.reportDate).ToString('dd/MM/yyyy') }
+        Ajouter "Stockage" "Stockage SharePoint + OneDrive" "OK" ("{0} utilisés au total (relevé Microsoft du {1})" -f (Taille ($OSP + $OOD)), $Date) "Le quota du tenant n'est pas lisible en lecture seule : le comparer dans le centre d'administration SharePoint > Stockage." @("SharePoint (sites et Teams) : $(Taille $OSP)", "OneDrive (tous les utilisateurs) : $(Taille $OOD)")
+    }
+} catch { Ajouter "Stockage" "Stockage SharePoint + OneDrive" "GRIS" (Raison $_) }
+
 try { & { $WarningPreference = "SilentlyContinue"; Disconnect-MgGraph -ErrorAction SilentlyContinue 3>$null | Out-Null } } catch { }
 
 # ================= Rapport HTML =================
@@ -239,7 +275,7 @@ $NbOK = @($Res | Where-Object Etat -eq "OK").Count; $NbOr = @($Res | Where-Objec
 $NbRo = @($Res | Where-Object Etat -eq "ROUGE").Count; $NbGr = @($Res | Where-Object Etat -eq "GRIS").Count
 $Verdict = if ($NbRo) { "Des risques importants sont à corriger." } elseif ($NbOr) { "Bonne base, quelques points à améliorer." } else { "Très bonne configuration." }
 $Lignes = ""
-foreach ($Theme in @("Comptes", "Postes", "Licences")) {
+foreach ($Theme in @("Comptes", "Postes", "Licences", "Stockage")) {
     $Lignes += "<h2>$(E $Theme)</h2>"
     foreach ($R in @($Res | Where-Object Theme -eq $Theme)) {
         $Lib = @{ OK = "OK"; ORANGE = "À améliorer"; ROUGE = "Risque"; GRIS = "Non vérifiable" }[$R.Etat]
@@ -276,7 +312,7 @@ a{color:#1F3A5F}
 <p class="verdict">$Verdict</p>
 $Lignes
 </main>
-<footer>Bilan 365 v1.1.0 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
+<footer>Bilan 365 v1.2.0 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
 </body></html>
 "@
 $Sortie = Join-Path ([Environment]::GetFolderPath("Desktop")) ("Bilan365_{0}_{1}.html" -f ($Domaine -replace '[^\w\.-]', '_'), (Get-Date -Format "yyyy-MM-dd_HH-mm"))

@@ -13,7 +13,8 @@ Il analyse un tenant et produit un **rapport HTML clair** (vert / orange / rouge
 |---|---|
 | Comptes | Administrateurs généraux (trop ou pas assez), double authentification (admins compris), paramètres de sécurité par défaut ou accès conditionnel, comptes inactifs depuis 90 jours, invités externes |
 | Postes | Inscription automatique dans Intune, utilisateurs administrateurs de leur PC, LAPS activé et mot de passe sauvegardé pour chaque PC, chiffrement BitLocker, conformité, PC qui ne se synchronisent plus, règle de conformité, mises à jour Windows pilotées |
-| Licences | Licences payées mais attribuées à personne |
+| Licences | Licences payées mais attribuées à personne, licences en dépassement, abonnements expirés (période de grâce) ou suspendus |
+| Stockage | Espace utilisé SharePoint (sites et Teams) + OneDrive, au total et par service |
 
 Quand un contrôle ne peut pas être fait (licence absente, droit refusé), il est marqué « non vérifiable » : le bilan ne s'arrête jamais en route.
 
@@ -42,7 +43,7 @@ Sans fenêtre : `Bilan-365.ps1 -Compte admin@entreprise.fr`
 
 ## Droits demandés (tous en lecture)
 
-`Directory.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`, `Policy.Read.DeviceConfiguration`, `DeviceManagementManagedDevices.Read.All`, `DeviceManagementConfiguration.Read.All`, `DeviceLocalCredential.ReadBasic.All` (sait seulement si un mot de passe LAPS existe, ne le lit pas).
+`Directory.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`, `Policy.Read.DeviceConfiguration`, `DeviceManagementManagedDevices.Read.All`, `DeviceManagementConfiguration.Read.All`, `DeviceLocalCredential.ReadBasic.All` (sait seulement si un mot de passe LAPS existe, ne le lit pas), `Reports.Read.All` (stockage utilisé).
 
 Prérequis : Windows 10 ou 11, PowerShell 5.1, un compte administrateur du tenant. Le module `Microsoft.Graph.Authentication` s'installe tout seul pour votre utilisateur s'il manque. Certains contrôles (dernière connexion, double authentification) demandent une licence Entra ID P1, incluse dans Microsoft 365 Business Premium.
 
@@ -51,6 +52,11 @@ Prérequis : Windows 10 ou 11, PowerShell 5.1, un compte administrateur du tenan
 Les autres outils Pactio (bilan de PC, GPO pour TPE, scripts Microsoft 365 et Intune, contrats de maintenance) : **[pactiofr.gumroad.com](https://pactiofr.gumroad.com)**
 
 Un bilan de PC Windows, gratuit lui aussi : **[Bilan express](https://github.com/sebastienmastain/bilan-express)**
+
+## Nouveautés
+
+- **1.2.0** : licences en dépassement et abonnements en alerte, stockage SharePoint + OneDrive utilisé. Merci à ppx32 (r/Sysadmin_Fr) pour les idées. Le quota de stockage du tenant n'est pas lisible en lecture seule : à comparer dans le centre d'administration SharePoint.
+- **1.1.0** : première version publique.
 
 ## Licence
 
