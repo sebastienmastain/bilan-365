@@ -1,5 +1,5 @@
 ﻿<#PSScriptInfo
-.VERSION 1.2.0
+.VERSION 1.3.0
 .GUID 25ee63a4-b719-4f3c-a76b-7151bb4487ff
 .AUTHOR Pactio
 .COMPANYNAME Pactio
@@ -7,7 +7,7 @@
 .TAGS Microsoft365 M365 Intune Entra Audit Security Bilan French Sysadmin MSP
 .PROJECTURI https://github.com/sebastienmastain/bilan-365
 .REQUIREDMODULES Microsoft.Graph.Authentication
-.RELEASENOTES 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32 sur r/Sysadmin_Fr). 1.1.0 - première version publique.
+.RELEASENOTES 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
 #>
 
 <#
@@ -20,21 +20,24 @@
         .\Bilan-365.ps1
         .\Bilan-365.ps1 -Compte admin@entreprise.fr
 
-    Vérifie : administrateurs généraux, double authentification (admins compris), paramètres de
-    sécurité par défaut ou accès conditionnel, comptes inactifs, invités, inscription automatique
-    dans Intune, utilisateurs administrateurs de leur PC, LAPS, chiffrement BitLocker, conformité
-    et synchronisation des PC, règle de conformité, mises à jour Windows pilotées, licences libres,
-    licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé.
+    Vérifie : administrateurs généraux, rôles admin permanents ou éligibles (PIM), double
+    authentification (admins compris), réinitialisation du mot de passe en libre-service, paramètres
+    de sécurité par défaut ou accès conditionnel, comptes inactifs, invités, usage de SMTP AUTH,
+    inscription automatique dans Intune, utilisateurs administrateurs de leur PC, LAPS, chiffrement
+    BitLocker, conformité et synchronisation des PC, règle de conformité, mises à jour Windows
+    pilotées, licences libres, licences sur comptes désactivés, licences en dépassement ou
+    abonnements en alerte, stockage SharePoint + OneDrive utilisé.
 
 .PARAMETER Compte
     Compte administrateur du tenant (ex. admin@entreprise.fr). Sans ce paramètre, une fenêtre le demande.
 
 .NOTES
-    Pactio · Bilan 365 — v1.2.0 (gratuit)
+    Pactio · Bilan 365 — v1.3.0 (gratuit)
     Prérequis : Windows 10 / 11, PowerShell 5.1. Le module Microsoft.Graph.Authentication est
                 installé automatiquement pour l'utilisateur s'il manque.
     Droits    : un compte administrateur du tenant ; Microsoft demande d'accepter des droits de
-                LECTURE uniquement (Directory, AuditLog, Policy, Intune en lecture, LAPS en lecture de base).
+                LECTURE uniquement (Directory, AuditLog, Policy, Intune en lecture, LAPS en lecture
+                de base, rapports d'usage, rôles en lecture).
     Licence   : usage libre, y compris chez vos clients. Redistribution interdite.
 #>
 [CmdletBinding()]
@@ -70,7 +73,8 @@ if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
 }
 Import-Module Microsoft.Graph.Authentication
 $Droits = @("Directory.Read.All", "AuditLog.Read.All", "Policy.Read.All", "Policy.Read.DeviceConfiguration",
-            "DeviceManagementManagedDevices.Read.All", "DeviceManagementConfiguration.Read.All", "DeviceLocalCredential.ReadBasic.All", "Reports.Read.All")
+            "DeviceManagementManagedDevices.Read.All", "DeviceManagementConfiguration.Read.All", "DeviceLocalCredential.ReadBasic.All",
+            "Reports.Read.All", "RoleManagement.Read.Directory")
 Write-Host "Connexion : choisissez le compte $Compte (la fenêtre Microsoft peut être cachée : Alt+Tab)." -ForegroundColor Cyan
 Connect-MgGraph -TenantId $Domaine -Scopes $Droits -NoWelcome
 $Ctx = Get-MgContext
@@ -81,9 +85,12 @@ if ($Ctx.Account -ne $Compte) {
 
 $G1 = "https://graph.microsoft.com/v1.0"; $GB = "https://graph.microsoft.com/beta"
 function Lire([string]$Uri) { Invoke-MgGraphRequest -Method GET -Uri $Uri -OutputType Hashtable }
-function Lire-Tout([string]$Uri) {
-    $Res = New-Object System.Collections.Generic.List[object]
-    while ($Uri) { $R = Lire $Uri; foreach ($V in $R.value) { $Res.Add($V) }; $Uri = $R.'@odata.nextLink' }
+function Lire-Tout([string]$Uri, [int]$MaxPages = 0) {
+    $Res = New-Object System.Collections.Generic.List[object]; $P = 0
+    while ($Uri) {
+        $R = Lire $Uri; foreach ($V in $R.value) { $Res.Add($V) }; $Uri = $R.'@odata.nextLink'
+        $P++; if ($MaxPages -and $P -ge $MaxPages) { break }
+    }
     return , $Res.ToArray()
 }
 
@@ -94,10 +101,16 @@ function Ajouter([string]$Theme, [string]$Controle, [string]$Etat, [string]$Cons
     $Coul = @{ OK = "Green"; ORANGE = "Yellow"; ROUGE = "Red"; GRIS = "DarkGray" }[$Etat]
     Write-Host ("  [{0,-6}] {1} : {2}" -f $Etat, $Controle, $Constat) -ForegroundColor $Coul
 }
+# « Non vérifiable » : on dit si c'est une LICENCE Microsoft qui manque au tenant, ou un DROIT qui manque au compte.
 function Raison($Err) {
-    $M = "$($Err.Exception.Message)"
-    if ($M -match "403|Forbidden|Authorization|licen|premium|P1") { return "non vérifiable (licence ou droit manquant)" }
-    return "non vérifiable ($($M.Split("`n")[0]))"
+    $M = "$($Err.Exception.Message) $($Err.ErrorDetails.Message)"
+    if ($M -match "NonPremium|PremiumLicense|Premium|licen|SKU|\bP1\b|\bP2\b|not licensed|subscription") {
+        return "non vérifiable : licence manquante dans le tenant (fonction réservée à une licence Microsoft supérieure, ex. Entra ID P1/P2)"
+    }
+    if ($M -match "Authorization_RequestDenied|Insufficient privileges|Forbidden|\b403\b|\b401\b|Unauthorized|AccessDenied|Access is denied|scope|consent") {
+        return "non vérifiable : droit manquant (le compte n'a pas le rôle admin nécessaire, ou l'accord de lecture n'a pas été donné)"
+    }
+    return "non vérifiable ($($M.Trim().Split("`n")[0]))"
 }
 $Il_y_a90 = (Get-Date).AddDays(-90)
 
@@ -106,19 +119,53 @@ Write-Host "=== Bilan 365 - $Domaine ===" -ForegroundColor Cyan
 $Org = $null; try { $Org = (Lire "$G1/organization?`$select=displayName").value[0] } catch { }
 $NomOrg = if ($Org) { $Org.displayName } else { $Domaine }
 
+# Lectures partagées par plusieurs contrôles (une erreur ici est traitée dans chaque contrôle)
+$Skus = $null; try { $Skus = Lire-Tout "$G1/subscribedSkus?`$select=skuId,skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus,servicePlans" } catch { $ErrSkus = $_ }
+$NomsSku = @{ SPB = "Microsoft 365 Business Premium"; O365_BUSINESS_PREMIUM = "Microsoft 365 Business Standard"; O365_BUSINESS_ESSENTIALS = "Microsoft 365 Business Basic"
+    O365_BUSINESS = "Microsoft 365 Apps for business"; SMB_BUSINESS = "Microsoft 365 Apps for business"; ENTERPRISEPACK = "Office 365 E3"; STANDARDPACK = "Office 365 E1"
+    SPE_E3 = "Microsoft 365 E3"; SPE_E5 = "Microsoft 365 E5"; EXCHANGESTANDARD = "Exchange Online (Plan 1)"; EXCHANGEENTERPRISE = "Exchange Online (Plan 2)"
+    INTUNE_A = "Microsoft Intune Plan 1"; AAD_PREMIUM = "Microsoft Entra ID P1"; AAD_PREMIUM_P2 = "Microsoft Entra ID P2"; Microsoft_365_Business_Premium_Donation_Non_Profit = "Business Premium (associations)" }
+function NomLicence([string]$P) { if ($NomsSku.ContainsKey($P)) { $NomsSku[$P] } else { $P } }
+
 # ---- 1. Administrateurs généraux
+$Adm = @()
 try {
-    $Adm = Lire-Tout "$G1/directoryRoles(roleTemplateId='62e90394-69f5-4237-9190-012177145e10')/members?`$select=displayName,userPrincipalName"
+    $Adm = Lire-Tout "$G1/directoryRoles(roleTemplateId='62e90394-69f5-4237-9190-012177145e10')/members?`$select=id,displayName,userPrincipalName"
     $N = $Adm.Count; $Noms = @($Adm | ForEach-Object { "$($_.displayName) ($($_.userPrincipalName))" })
-    if ($N -eq 0) { Ajouter "Comptes" "Administrateurs généraux" "ROUGE" "aucun administrateur général trouvé" "Vérifier les rôles dans Entra." }
+    if ($N -eq 0) { Ajouter "Comptes" "Administrateurs généraux" "ROUGE" "aucun administrateur général actif trouvé" "Vérifier les rôles dans Entra (si PIM est utilisé, voir le contrôle « Rôles admin permanents »)." }
     elseif ($N -eq 1) { Ajouter "Comptes" "Administrateurs généraux" "ORANGE" "1 seul administrateur général" "Prévoir un 2e compte admin de secours, sinon personne ne peut réparer si ce compte est bloqué." $Noms }
     elseif ($N -le 4) { Ajouter "Comptes" "Administrateurs généraux" "OK" "$N administrateurs généraux" "" $Noms }
     else { Ajouter "Comptes" "Administrateurs généraux" "ORANGE" "$N administrateurs généraux (trop)" "Microsoft conseille moins de 5 : chaque compte admin est une porte d'entrée." $Noms }
 } catch { Ajouter "Comptes" "Administrateurs généraux" "GRIS" (Raison $_) }
 
-# ---- 2. Double authentification
+# ---- 1b. Rôles admin permanents ou éligibles (PIM)
 try {
-    $Reg = Lire-Tout "$G1/reports/authenticationMethods/userRegistrationDetails?`$select=userPrincipalName,isMfaRegistered,isAdmin,userType"
+    if (-not $Skus) { throw $ErrSkus }
+    $AvecP2 = @($Skus | Where-Object { $_.capabilityStatus -eq "Enabled" } | ForEach-Object { $_.servicePlans } |
+        Where-Object { $_.servicePlanName -match "^AAD_PREMIUM_P2$|IDENTITY_GOVERNANCE" }).Count -gt 0
+    if (-not $AvecP2) {
+        Ajouter "Comptes" "Rôles admin permanents ou éligibles (PIM)" "GRIS" "non vérifiable : licence manquante dans le tenant (PIM demande Entra ID P2 ou ID Governance) ; tous les rôles admin sont donc permanents" "Sans PIM, garder peu d'administrateurs généraux et des comptes admin séparés des comptes de tous les jours."
+    } else {
+        $GA = "62e90394-69f5-4237-9190-012177145e10"
+        $ActifsPim = Lire-Tout "$G1/roleManagement/directory/roleAssignmentScheduleInstances?`$filter=roleDefinitionId eq '$GA'"
+        $Elig = Lire-Tout "$G1/roleManagement/directory/roleEligibilityScheduleInstances?`$filter=roleDefinitionId eq '$GA'"
+        $Perm = @($ActifsPim | Where-Object { $_.assignmentType -eq "Assigned" -and -not $_.endDateTime })
+        $Noms = @{}; foreach ($A in $Adm) { if ($A.id) { $Noms[$A.id] = $A.userPrincipalName } }
+        function NomPrincipal($Id) {
+            if ($Noms.ContainsKey($Id)) { return $Noms[$Id] }
+            try { $O = Lire "$G1/directoryObjects/$Id`?`$select=displayName,userPrincipalName"; if ($O.userPrincipalName) { return $O.userPrincipalName } else { return "$($O.displayName) (groupe ou application)" } } catch { return $Id }
+        }
+        $Det = @($Perm | ForEach-Object { "$(NomPrincipal $_.principalId) : permanent" }) + @($Elig | ForEach-Object { "$(NomPrincipal $_.principalId) : éligible (activation à la demande)" })
+        if ($Perm.Count -gt 2) { Ajouter "Comptes" "Rôles admin permanents ou éligibles (PIM)" "ORANGE" "$($Perm.Count) administrateurs généraux permanents, $($Elig.Count) éligible(s)" "PIM est disponible : ne garder en permanent que 1 ou 2 comptes de secours, les autres en éligible (activation limitée dans le temps)." $Det }
+        elseif ($Elig.Count -eq 0 -and $Perm.Count -gt 1) { Ajouter "Comptes" "Rôles admin permanents ou éligibles (PIM)" "ORANGE" "PIM disponible mais pas utilisé ($($Perm.Count) administrateurs généraux permanents)" "Passer les comptes admin du quotidien en éligible, garder 1 compte de secours permanent." $Det }
+        else { Ajouter "Comptes" "Rôles admin permanents ou éligibles (PIM)" "OK" "$($Perm.Count) permanent(s), $($Elig.Count) éligible(s)" "" $Det }
+    }
+} catch { Ajouter "Comptes" "Rôles admin permanents ou éligibles (PIM)" "GRIS" (Raison $_) }
+
+# ---- 2. Double authentification
+$Reg = $null
+try {
+    $Reg = Lire-Tout "$G1/reports/authenticationMethods/userRegistrationDetails?`$select=id,userPrincipalName,isMfaRegistered,isAdmin,userType,isSsprEnabled,isSsprRegistered"
     $Membres = @($Reg | Where-Object { $_.userType -ne "guest" })
     $Sans = @($Membres | Where-Object { -not $_.isMfaRegistered })
     $AdmSans = @($Sans | Where-Object { $_.isAdmin })
@@ -138,13 +185,13 @@ try {
 } catch { Ajouter "Comptes" "Protection des connexions" "GRIS" (Raison $_) }
 
 # ---- 4. Comptes inactifs
+$Us = $null
 try {
-    $Us = $null
-    try { $Us = Lire-Tout "$G1/users?`$select=displayName,userPrincipalName,accountEnabled,userType,assignedLicenses,createdDateTime,signInActivity" ; $AvecConnexion = $true }
-    catch { $Us = Lire-Tout "$G1/users?`$select=displayName,userPrincipalName,accountEnabled,userType,assignedLicenses,createdDateTime"; $AvecConnexion = $false }
+    try { $Us = Lire-Tout "$G1/users?`$select=id,displayName,userPrincipalName,accountEnabled,userType,assignedLicenses,createdDateTime,signInActivity" ; $AvecConnexion = $true }
+    catch { $ErrConnexion = $_; $Us = Lire-Tout "$G1/users?`$select=id,displayName,userPrincipalName,accountEnabled,userType,assignedLicenses,createdDateTime"; $AvecConnexion = $false }
     $Actifs = @($Us | Where-Object { $_.accountEnabled -and $_.userType -ne "Guest" })
     $Invites = @($Us | Where-Object { $_.userType -eq "Guest" })
-    if (-not $AvecConnexion) { Ajouter "Comptes" "Comptes inactifs" "GRIS" "date de dernière connexion non disponible (licence Entra P1 nécessaire)" }
+    if (-not $AvecConnexion) { Ajouter "Comptes" "Comptes inactifs" "GRIS" ("date de dernière connexion " + (Raison $ErrConnexion)) }
     else {
         $Inactifs = @()
         foreach ($U in $Actifs) {
@@ -160,6 +207,41 @@ try {
     if ($Invites.Count) { Ajouter "Comptes" "Invités externes" "ORANGE" "$($Invites.Count) invité(s) externe(s)" "Vérifier qu'ils ont encore besoin d'accès." @($Invites | ForEach-Object { $_.userPrincipalName }) }
     else { Ajouter "Comptes" "Invités externes" "OK" "aucun invité externe" }
 } catch { Ajouter "Comptes" "Comptes inactifs" "GRIS" (Raison $_) }
+
+# ---- 4b. Réinitialisation du mot de passe en libre-service (SSPR)
+try {
+    if (-not $Reg) { $Reg = Lire-Tout "$G1/reports/authenticationMethods/userRegistrationDetails?`$select=id,userPrincipalName,isAdmin,userType,isSsprEnabled,isSsprRegistered" }
+    $Cibles = @($Reg | Where-Object { $_.userType -ne "guest" })
+    if ($Us) { $IdsActifs = @{}; foreach ($U in $Us) { if ($U.accountEnabled -and $U.userType -ne "Guest") { $IdsActifs[$U.id] = 1 } }; $Cibles = @($Cibles | Where-Object { $IdsActifs.ContainsKey($_.id) }) }
+    $AdminsSspr = $null; try { $AdminsSspr = (Lire "$G1/policies/authorizationPolicy").allowedToUseSSPR } catch { }
+    $LigneAdm = switch ($AdminsSspr) { $true { "Administrateurs : réinitialisation en libre-service autorisée (réglage Microsoft par défaut)" } $false { "Administrateurs : réinitialisation en libre-service interdite" } default { "Administrateurs : réglage non lisible" } }
+    $Ouverts = @($Cibles | Where-Object { $_.isSsprEnabled })
+    $NonEnr = @($Ouverts | Where-Object { -not $_.isSsprRegistered })
+    if ($Cibles.Count -eq 0) { Ajouter "Comptes" "Mot de passe oublié (libre-service)" "GRIS" "aucun utilisateur trouvé" }
+    elseif ($Ouverts.Count -eq 0) { Ajouter "Comptes" "Mot de passe oublié (libre-service)" "ORANGE" "désactivé pour les utilisateurs" "Chaque mot de passe oublié passe par l'administrateur. Si on l'active : exiger 2 méthodes de vérification." @($LigneAdm) }
+    elseif ($NonEnr.Count) { Ajouter "Comptes" "Mot de passe oublié (libre-service)" "ORANGE" ("activé pour {0}/{1} utilisateurs, dont {2} sans méthode enregistrée" -f $Ouverts.Count, $Cibles.Count, $NonEnr.Count) "Ces utilisateurs ne pourront pas réinitialiser seuls : leur faire enregistrer une méthode (Authenticator ou téléphone)." (@($LigneAdm) + @($NonEnr | ForEach-Object { "$($_.userPrincipalName) : aucune méthode enregistrée" + $(if ($_.isAdmin) { " (ADMIN)" } else { "" }) })) }
+    else { Ajouter "Comptes" "Mot de passe oublié (libre-service)" "OK" ("activé et prêt pour {0}/{1} utilisateurs" -f $Ouverts.Count, $Cibles.Count) "" @($LigneAdm) }
+} catch { Ajouter "Comptes" "Mot de passe oublié (libre-service)" "GRIS" (Raison $_) }
+
+# ---- 4c. SMTP AUTH réellement utilisé (journal des connexions, 30 derniers jours)
+try {
+    $Depuis = (Get-Date).ToUniversalTime().AddDays(-30).ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $Smtp = New-Object System.Collections.Generic.List[object]
+    foreach ($Client in @("Authenticated SMTP", "SMTP")) {
+        $F = [uri]::EscapeDataString("clientAppUsed eq '$Client' and createdDateTime ge $Depuis")
+        foreach ($S in (Lire-Tout "$G1/auditLogs/signIns?`$filter=$F&`$top=500&`$select=userPrincipalName,createdDateTime,status,ipAddress" 10)) { $Smtp.Add($S) }
+    }
+    $Ok = @($Smtp | Where-Object { [int]$_.status.errorCode -eq 0 }); $Ko = @($Smtp | Where-Object { [int]$_.status.errorCode -ne 0 })
+    $ParCompte = @($Ok | Group-Object userPrincipalName | Sort-Object Count -Descending | ForEach-Object {
+        $Der = ($_.Group | ForEach-Object { [datetime]$_.createdDateTime } | Sort-Object -Descending | Select-Object -First 1).ToString('dd/MM/yyyy')
+        "$($_.Name) : $($_.Count) envoi(s) réussi(s), dernier le $Der" })
+    $Echecs = @($Ko | Group-Object userPrincipalName | Sort-Object Count -Descending | Select-Object -First 15 | ForEach-Object {
+        "$($_.Name) : $($_.Count) tentative(s) refusée(s) depuis $(@($_.Group | ForEach-Object { $_.ipAddress } | Select-Object -Unique).Count) adresse(s) IP" })
+    $Desactiver = "Le réglage SMTP AUTH lui-même (par boîte ou pour le tenant) ne se lit qu'avec le module Exchange Online, pas en lecture seule Graph."
+    if ($Ok.Count) { Ajouter "Comptes" "SMTP AUTH (envoi par identifiant et mot de passe)" "ORANGE" "$($ParCompte.Count) compte(s) l'utilisent sur 30 jours" "Souvent un copieur, un logiciel métier ou un script. Ce protocole ne passe pas par la double authentification : le garder seulement sur ces comptes (mot de passe long, accès conditionnel), le couper ailleurs. $Desactiver" (@($ParCompte) + @($Echecs)) }
+    elseif ($Ko.Count) { Ajouter "Comptes" "SMTP AUTH (envoi par identifiant et mot de passe)" "ORANGE" "aucun envoi réussi, mais $($Ko.Count) tentative(s) refusée(s) sur 30 jours" "Personne ne s'en sert et des robots testent des mots de passe par ce biais : le désactiver pour tout le tenant. $Desactiver" $Echecs }
+    else { Ajouter "Comptes" "SMTP AUTH (envoi par identifiant et mot de passe)" "OK" "aucune connexion SMTP AUTH sur 30 jours" "Il peut sans doute être désactivé pour tout le tenant sans rien casser. $Desactiver" }
+} catch { Ajouter "Comptes" "SMTP AUTH (envoi par identifiant et mot de passe)" "GRIS" (Raison $_) }
 
 # ---- 5. Inscription automatique Intune
 try {
@@ -220,22 +302,29 @@ try {
 
 # ---- 9. Licences inutilisées
 try {
-    $Skus = Lire-Tout "$G1/subscribedSkus?`$select=skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus"
-    $NomsSku = @{ SPB = "Microsoft 365 Business Premium"; O365_BUSINESS_PREMIUM = "Microsoft 365 Business Standard"; O365_BUSINESS_ESSENTIALS = "Microsoft 365 Business Basic"
-        O365_BUSINESS = "Microsoft 365 Apps for business"; SMB_BUSINESS = "Microsoft 365 Apps for business"; ENTERPRISEPACK = "Office 365 E3"; STANDARDPACK = "Office 365 E1"
-        SPE_E3 = "Microsoft 365 E3"; SPE_E5 = "Microsoft 365 E5"; EXCHANGESTANDARD = "Exchange Online (Plan 1)"; EXCHANGEENTERPRISE = "Exchange Online (Plan 2)"
-        INTUNE_A = "Microsoft Intune Plan 1"; AAD_PREMIUM = "Microsoft Entra ID P1"; Microsoft_365_Business_Premium_Donation_Non_Profit = "Business Premium (associations)" }
-    function NomLicence([string]$P) { if ($NomsSku.ContainsKey($P)) { $NomsSku[$P] } else { $P } }
+    if (-not $Skus) { throw $ErrSkus }
     $Libres = @($Skus | Where-Object { $_.capabilityStatus -eq "Enabled" -and ($_.prepaidUnits.enabled - $_.consumedUnits) -gt 0 -and $_.prepaidUnits.enabled -lt 10000 })
     $TotLibres = 0; foreach ($S in $Libres) { $TotLibres += ($S.prepaidUnits.enabled - $S.consumedUnits) }
     if ($Libres.Count) { Ajouter "Licences" "Licences payées non attribuées" "ORANGE" "$TotLibres licence(s) libre(s)" "Des licences payées chaque mois sans utilisateur : à réduire si personne n'arrive." @($Libres | ForEach-Object { "{0} : {1} libre(s) sur {2}" -f (NomLicence $_.skuPartNumber), ($_.prepaidUnits.enabled - $_.consumedUnits), $_.prepaidUnits.enabled }) }
     else { Ajouter "Licences" "Licences payées non attribuées" "OK" "aucune licence libre" }
 } catch { Ajouter "Licences" "Licences payées non attribuées" "GRIS" (Raison $_) }
 
+# ---- 9b. Licences attribuées à des comptes désactivés
+try {
+    if (-not $Us) { $Us = Lire-Tout "$G1/users?`$select=id,userPrincipalName,accountEnabled,userType,assignedLicenses" }
+    $NomParId = @{}; if ($Skus) { foreach ($S in $Skus) { $NomParId["$($S.skuId)"] = NomLicence $S.skuPartNumber } }
+    $Bloques = @($Us | Where-Object { -not $_.accountEnabled -and $_.assignedLicenses.Count })
+    $NbLic = 0; foreach ($U in $Bloques) { $NbLic += $U.assignedLicenses.Count }
+    if ($Bloques.Count) {
+        Ajouter "Licences" "Licences sur comptes désactivés" "ORANGE" "$($Bloques.Count) compte(s) désactivé(s) gardent $NbLic licence(s)" "Licences payées pour des comptes bloqués : les retirer (sauf besoin voulu, ex. boîte partagée de plus de 50 Go ou archivage)." @($Bloques | ForEach-Object {
+            $L = @($_.assignedLicenses | ForEach-Object { if ($NomParId.ContainsKey("$($_.skuId)")) { $NomParId["$($_.skuId)"] } else { "$($_.skuId)" } }) -join ", "
+            "$($_.userPrincipalName) : $L" })
+    } else { Ajouter "Licences" "Licences sur comptes désactivés" "OK" "aucun compte désactivé ne garde de licence" }
+} catch { Ajouter "Licences" "Licences sur comptes désactivés" "GRIS" (Raison $_) }
+
 # ---- 10. Licences en dépassement / abonnements en alerte
 try {
-    if (-not (Get-Command NomLicence -ErrorAction SilentlyContinue)) { function script:NomLicence([string]$P) { $P } }
-    if (-not $Skus) { $Skus = Lire-Tout "$G1/subscribedSkus?`$select=skuPartNumber,prepaidUnits,consumedUnits,capabilityStatus" }
+    if (-not $Skus) { throw $ErrSkus }
     $Pb = @()
     foreach ($S in $Skus) {
         $Nom = NomLicence $S.skuPartNumber
@@ -312,7 +401,7 @@ a{color:#1F3A5F}
 <p class="verdict">$Verdict</p>
 $Lignes
 </main>
-<footer>Bilan 365 v1.2.0 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
+<footer>Bilan 365 v1.3.0 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
 </body></html>
 "@
 $Sortie = Join-Path ([Environment]::GetFolderPath("Desktop")) ("Bilan365_{0}_{1}.html" -f ($Domaine -replace '[^\w\.-]', '_'), (Get-Date -Format "yyyy-MM-dd_HH-mm"))
