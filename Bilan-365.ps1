@@ -1,5 +1,5 @@
 ﻿<#PSScriptInfo
-.VERSION 1.3.0
+.VERSION 1.3.1
 .GUID 25ee63a4-b719-4f3c-a76b-7151bb4487ff
 .AUTHOR Pactio
 .COMPANYNAME Pactio
@@ -7,7 +7,7 @@
 .TAGS Microsoft365 M365 Intune Entra Audit Security Bilan French Sysadmin MSP
 .PROJECTURI https://github.com/sebastienmastain/bilan-365
 .REQUIREDMODULES Microsoft.Graph.Authentication
-.RELEASENOTES 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
+.RELEASENOTES 1.3.1 - SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal des connexions, période réellement analysée affichée (7 jours sans P1 : jamais de conclusion « on peut couper »), comptes de copieur / scanner / application repérés avec leur adresse IP (retour de Ludo1377). Correction : nombre de PC, de règles de conformité, d'anneaux de mise à jour et d'accès conditionnel faux (et contrôle « PC qui ne donnent plus de nouvelles » en erreur) dès que le tenant en avait plusieurs. 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
 #>
 
 <#
@@ -32,7 +32,7 @@
     Compte administrateur du tenant (ex. admin@entreprise.fr). Sans ce paramètre, une fenêtre le demande.
 
 .NOTES
-    Pactio · Bilan 365 — v1.3.0 (gratuit)
+    Pactio · Bilan 365 — v1.3.1 (gratuit)
     Prérequis : Windows 10 / 11, PowerShell 5.1. Le module Microsoft.Graph.Authentication est
                 installé automatiquement pour l'utilisateur s'il manque.
     Droits    : un compte administrateur du tenant ; Microsoft demande d'accepter des droits de
@@ -126,6 +126,12 @@ $NomsSku = @{ SPB = "Microsoft 365 Business Premium"; O365_BUSINESS_PREMIUM = "M
     SPE_E3 = "Microsoft 365 E3"; SPE_E5 = "Microsoft 365 E5"; EXCHANGESTANDARD = "Exchange Online (Plan 1)"; EXCHANGEENTERPRISE = "Exchange Online (Plan 2)"
     INTUNE_A = "Microsoft Intune Plan 1"; AAD_PREMIUM = "Microsoft Entra ID P1"; AAD_PREMIUM_P2 = "Microsoft Entra ID P2"; Microsoft_365_Business_Premium_Donation_Non_Profit = "Business Premium (associations)" }
 function NomLicence([string]$P) { if ($NomsSku.ContainsKey($P)) { $NomsSku[$P] } else { $P } }
+# Licence Entra ID P1/P2 présente ? (lue dans les abonnements, sans se fier au texte des erreurs Microsoft)
+$AvecP1 = $null
+if ($Skus) {
+    $AvecP1 = @($Skus | Where-Object { $_.capabilityStatus -eq "Enabled" -and [int]$_.prepaidUnits.enabled -gt 0 } | ForEach-Object { $_.servicePlans } |
+        Where-Object { $_.servicePlanName -match "^AAD_PREMIUM(_P2)?$" -and $_.provisioningStatus -ne "Disabled" }).Count -gt 0
+}
 
 # ---- 1. Administrateurs généraux
 $Adm = @()
@@ -178,7 +184,7 @@ try {
 # ---- 3. Paramètres de sécurité par défaut / accès conditionnel
 try {
     $SD = Lire "$G1/policies/identitySecurityDefaultsEnforcementPolicy"
-    $CA = @(); try { $CA = @(Lire-Tout "$G1/identity/conditionalAccess/policies?`$select=displayName,state" | Where-Object { $_.state -eq "enabled" }) } catch { }
+    $CA = @(); try { $CA = @((Lire-Tout "$G1/identity/conditionalAccess/policies?`$select=displayName,state") | Where-Object { $_.state -eq "enabled" }) } catch { }
     if ($SD.isEnabled) { Ajouter "Comptes" "Protection des connexions" "OK" "paramètres de sécurité par défaut activés" }
     elseif ($CA.Count) { Ajouter "Comptes" "Protection des connexions" "OK" "$($CA.Count) règle(s) d'accès conditionnel active(s)" "" @($CA | ForEach-Object { $_.displayName }) }
     else { Ajouter "Comptes" "Protection des connexions" "ROUGE" "ni paramètres de sécurité par défaut, ni accès conditionnel" "Rien n'oblige la double authentification à la connexion : activer au minimum les paramètres de sécurité par défaut." }
@@ -223,25 +229,50 @@ try {
     else { Ajouter "Comptes" "Mot de passe oublié (libre-service)" "OK" ("activé et prêt pour {0}/{1} utilisateurs" -f $Ouverts.Count, $Cibles.Count) "" @($LigneAdm) }
 } catch { Ajouter "Comptes" "Mot de passe oublié (libre-service)" "GRIS" (Raison $_) }
 
-# ---- 4c. SMTP AUTH réellement utilisé (journal des connexions, 30 derniers jours)
+# ---- 4c. SMTP AUTH réellement utilisé (journal des connexions)
+# Conservation Microsoft du journal des connexions : 30 jours avec Entra ID P1/P2, 7 jours sans.
+$NomSmtp = "SMTP AUTH (envoi par identifiant et mot de passe)"
 try {
-    $Depuis = (Get-Date).ToUniversalTime().AddDays(-30).ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $Jours = if ($AvecP1 -eq $true) { 30 } else { 7 }
+    $Debut = (Get-Date).AddDays(-$Jours)
+    $Periode = "période analysée : du $($Debut.ToString('dd/MM/yyyy')) au $((Get-Date).ToString('dd/MM/yyyy')), soit $Jours jours"
+    $Depuis = $Debut.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
     $Smtp = New-Object System.Collections.Generic.List[object]
-    foreach ($Client in @("Authenticated SMTP", "SMTP")) {
-        $F = [uri]::EscapeDataString("clientAppUsed eq '$Client' and createdDateTime ge $Depuis")
-        foreach ($S in (Lire-Tout "$G1/auditLogs/signIns?`$filter=$F&`$top=500&`$select=userPrincipalName,createdDateTime,status,ipAddress" 10)) { $Smtp.Add($S) }
+    try {
+        foreach ($Client in @("Authenticated SMTP", "SMTP")) {
+            $F = [uri]::EscapeDataString("clientAppUsed eq '$Client' and createdDateTime ge $Depuis")
+            foreach ($S in (Lire-Tout "$G1/auditLogs/signIns?`$filter=$F&`$top=500&`$select=userPrincipalName,userDisplayName,createdDateTime,status,ipAddress" 10)) { $Smtp.Add($S) }
+        }
+    } catch {
+        if ($AvecP1 -eq $false) { throw "licence : pas d'Entra ID P1/P2 dans le tenant, Microsoft ne donne pas accès au journal des connexions (et ne le garde que 7 jours)" }
+        throw
     }
-    $Ok = @($Smtp | Where-Object { [int]$_.status.errorCode -eq 0 }); $Ko = @($Smtp | Where-Object { [int]$_.status.errorCode -ne 0 })
-    $ParCompte = @($Ok | Group-Object userPrincipalName | Sort-Object Count -Descending | ForEach-Object {
-        $Der = ($_.Group | ForEach-Object { [datetime]$_.createdDateTime } | Sort-Object -Descending | Select-Object -First 1).ToString('dd/MM/yyyy')
-        "$($_.Name) : $($_.Count) envoi(s) réussi(s), dernier le $Der" })
+    # Comptes qui ressemblent à un copieur, un scanner ou une application (scan vers mail, alertes...)
+    $Machine = "scan|copieur|copy|photocop|imprim|print|mfp|multifonction|noreply|no-reply|ne-pas-repondre|smtp|relay|alerte|alert|notif|canon|ricoh|konica|kyocera|xerox|sharp|brother|lexmark|toshiba|epson"
+    $ParCompte = @(); $Copieurs = 0
+    foreach ($G in @($Smtp | Where-Object { [int]$_.status.errorCode -eq 0 } | Group-Object userPrincipalName | Sort-Object Count -Descending)) {
+        $Der = ($G.Group | ForEach-Object { [datetime]$_.createdDateTime } | Sort-Object -Descending | Select-Object -First 1).ToString('dd/MM/yyyy')
+        $Ips = @($G.Group | ForEach-Object { $_.ipAddress } | Where-Object { $_ } | Select-Object -Unique)
+        $TexteIp = if ($Ips.Count -le 3) { $Ips -join ", " } else { "$(($Ips | Select-Object -First 3) -join ', ') et $($Ips.Count - 3) autre(s)" }
+        $EstMachine = ("$($G.Name) $($G.Group[0].userDisplayName)" -match $Machine)
+        if ($EstMachine) { $Copieurs++ }
+        $ParCompte += "$($G.Name) : $($G.Count) envoi(s) réussi(s), dernier le $Der, depuis $TexteIp" + $(if ($EstMachine) { " → probablement un copieur, un scanner ou une application" } else { "" })
+    }
+    $Ko = @($Smtp | Where-Object { [int]$_.status.errorCode -ne 0 })
     $Echecs = @($Ko | Group-Object userPrincipalName | Sort-Object Count -Descending | Select-Object -First 15 | ForEach-Object {
         "$($_.Name) : $($_.Count) tentative(s) refusée(s) depuis $(@($_.Group | ForEach-Object { $_.ipAddress } | Select-Object -Unique).Count) adresse(s) IP" })
-    $Desactiver = "Le réglage SMTP AUTH lui-même (par boîte ou pour le tenant) ne se lit qu'avec le module Exchange Online, pas en lecture seule Graph."
-    if ($Ok.Count) { Ajouter "Comptes" "SMTP AUTH (envoi par identifiant et mot de passe)" "ORANGE" "$($ParCompte.Count) compte(s) l'utilisent sur 30 jours" "Souvent un copieur, un logiciel métier ou un script. Ce protocole ne passe pas par la double authentification : le garder seulement sur ces comptes (mot de passe long, accès conditionnel), le couper ailleurs. $Desactiver" (@($ParCompte) + @($Echecs)) }
-    elseif ($Ko.Count) { Ajouter "Comptes" "SMTP AUTH (envoi par identifiant et mot de passe)" "ORANGE" "aucun envoi réussi, mais $($Ko.Count) tentative(s) refusée(s) sur 30 jours" "Personne ne s'en sert et des robots testent des mots de passe par ce biais : le désactiver pour tout le tenant. $Desactiver" $Echecs }
-    else { Ajouter "Comptes" "SMTP AUTH (envoi par identifiant et mot de passe)" "OK" "aucune connexion SMTP AUTH sur 30 jours" "Il peut sans doute être désactivé pour tout le tenant sans rien casser. $Desactiver" }
-} catch { Ajouter "Comptes" "SMTP AUTH (envoi par identifiant et mot de passe)" "GRIS" (Raison $_) }
+    $Avant = "Avant toute coupure : repérer le copieur (scan vers mail) et les logiciels qui envoient des mails, souvent avec un compte que plus personne ne connaît. C'est le premier truc qui casse. Le réglage SMTP AUTH lui-même (par boîte ou pour le tenant) ne se lit qu'avec le module Exchange Online, pas en lecture seule Graph."
+    if ($ParCompte.Count) {
+        $Txt = "$($ParCompte.Count) compte(s) l'utilisent" + $(if ($Copieurs) { ", dont $Copieurs qui ressemble(nt) à un copieur, un scanner ou une application" } else { "" }) + " ($Periode)"
+        Ajouter "Comptes" $NomSmtp "ORANGE" $Txt "Ce protocole ne passe pas par la double authentification : le garder seulement sur ces comptes (mot de passe long, accès conditionnel), ou mieux, basculer le copieur sur un connecteur d'envoi, puis le couper ailleurs. $Avant" (@($ParCompte) + @($Echecs))
+    }
+    elseif ($Ko.Count) { Ajouter "Comptes" $NomSmtp "ORANGE" "aucun envoi réussi, mais $($Ko.Count) tentative(s) refusée(s) ($Periode)" "Des robots testent des mots de passe par ce biais. $(if ($Jours -lt 30) { 'Sur 7 jours seulement, on ne peut pas conclure que personne ne s''en sert.' } else { 'Personne ne s''en sert sur 30 jours : il peut sans doute être désactivé pour tout le tenant.' }) $Avant" $Echecs }
+    elseif ($Jours -lt 30) { Ajouter "Comptes" $NomSmtp "GRIS" "non concluant : aucune connexion SMTP AUTH vue, mais seulement 7 jours de journal ($Periode, pas de licence Entra ID P1/P2)" "Un copieur qui scanne une fois par mois n'apparaît pas forcément : ne pas couper SMTP AUTH sur ce seul résultat. $Avant" }
+    else { Ajouter "Comptes" $NomSmtp "OK" "aucune connexion SMTP AUTH ($Periode)" "Il peut sans doute être désactivé pour tout le tenant. $Avant" }
+} catch {
+    if ("$($_.Exception.Message)" -like "licence : *") { Ajouter "Comptes" $NomSmtp "GRIS" ("non vérifiable : " + "$($_.Exception.Message)".Substring(10)) "Sans journal des connexions, impossible de savoir qui utilise SMTP AUTH : ne pas le couper à l'aveugle (copieur, logiciels métier)." }
+    else { Ajouter "Comptes" $NomSmtp "GRIS" (Raison $_) }
+}
 
 # ---- 5. Inscription automatique Intune
 try {
@@ -265,7 +296,7 @@ try {
 
 # ---- 7. PC gérés : chiffrement, conformité, synchro, LAPS par PC
 try {
-    $PCs = @(Lire-Tout "$G1/deviceManagement/managedDevices?`$select=deviceName,operatingSystem,complianceState,isEncrypted,lastSyncDateTime,userPrincipalName,azureADDeviceId" | Where-Object { $_.operatingSystem -eq "Windows" })
+    $PCs = @((Lire-Tout "$G1/deviceManagement/managedDevices?`$select=deviceName,operatingSystem,complianceState,isEncrypted,lastSyncDateTime,userPrincipalName,azureADDeviceId") | Where-Object { $_.operatingSystem -eq "Windows" })
     if ($PCs.Count -eq 0) { Ajouter "Postes" "PC Windows gérés par Intune" "ROUGE" "aucun PC Windows géré" "Les PC ne sont pas dans Intune : aucune règle de sécurité ne s'applique." }
     else {
         Ajouter "Postes" "PC Windows gérés par Intune" "OK" "$($PCs.Count) PC"
@@ -282,7 +313,7 @@ try {
             $Laps = @(Lire-Tout "$G1/directory/deviceLocalCredentials?`$select=deviceName,lastBackupDateTime")
             $AvecLaps = @($Laps | ForEach-Object { $_.deviceName })
             $SansLaps = @($PCs | Where-Object { $AvecLaps -notcontains $_.deviceName })
-            if ($SansLaps.Count) { Ajouter "Postes" "Mot de passe admin local (LAPS) sauvegardé" "ROUGE" "$($SansLaps.Count)/$($PCs.Count) PC sans mot de passe LAPS dans Entra" "Créer une stratégie Windows LAPS dans Intune." @($SansLaps | ForEach-Object { $_.deviceName }) }
+            if ($SansLaps.Count) { Ajouter "Postes" "Mot de passe admin local (LAPS) sauvegardé" "ROUGE" "$($SansLaps.Count)/$($PCs.Count) PC sans mot de passe LAPS dans Entra" "Créer une stratégie Windows LAPS dans Intune. Pour un PC joint à un domaine Active Directory, le mot de passe peut être sauvegardé dans l'AD local plutôt que dans Entra : le vérifier là-bas avant de conclure." @($SansLaps | ForEach-Object { $_.deviceName }) }
             else { Ajouter "Postes" "Mot de passe admin local (LAPS) sauvegardé" "OK" "tous les PC" }
         } catch { Ajouter "Postes" "Mot de passe admin local (LAPS) sauvegardé" "GRIS" (Raison $_) }
     }
@@ -290,12 +321,12 @@ try {
 
 # ---- 8. Règles de conformité et mises à jour
 try {
-    $Comp = @(Lire-Tout "$GB/deviceManagement/deviceCompliancePolicies?`$select=displayName" | Where-Object { $_.'@odata.type' -match "windows10CompliancePolicy" })
+    $Comp = @((Lire-Tout "$GB/deviceManagement/deviceCompliancePolicies?`$select=displayName") | Where-Object { $_.'@odata.type' -match "windows10CompliancePolicy" })
     if ($Comp.Count) { Ajouter "Postes" "Règle de conformité Windows" "OK" "$($Comp.Count) règle(s)" "" @($Comp | ForEach-Object { $_.displayName }) }
     else { Ajouter "Postes" "Règle de conformité Windows" "ORANGE" "aucune" "Sans règle, Intune ne sait pas dire si un PC est à risque (non chiffré, sans antivirus...)." }
 } catch { Ajouter "Postes" "Règle de conformité Windows" "GRIS" (Raison $_) }
 try {
-    $WU = @(Lire-Tout "$GB/deviceManagement/deviceConfigurations?`$select=displayName" | Where-Object { $_.'@odata.type' -match "windowsUpdateForBusinessConfiguration" })
+    $WU = @((Lire-Tout "$GB/deviceManagement/deviceConfigurations?`$select=displayName") | Where-Object { $_.'@odata.type' -match "windowsUpdateForBusinessConfiguration" })
     if ($WU.Count) { Ajouter "Postes" "Mises à jour Windows pilotées" "OK" "$($WU.Count) anneau(x) de mise à jour" "" @($WU | ForEach-Object { $_.displayName }) }
     else { Ajouter "Postes" "Mises à jour Windows pilotées" "ORANGE" "aucun anneau de mise à jour" "Chaque PC fait comme il veut : certains peuvent rester des mois sans correctif." }
 } catch { Ajouter "Postes" "Mises à jour Windows pilotées" "GRIS" (Raison $_) }
@@ -401,7 +432,7 @@ a{color:#1F3A5F}
 <p class="verdict">$Verdict</p>
 $Lignes
 </main>
-<footer>Bilan 365 v1.3.0 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
+<footer>Bilan 365 v1.3.1 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
 </body></html>
 "@
 $Sortie = Join-Path ([Environment]::GetFolderPath("Desktop")) ("Bilan365_{0}_{1}.html" -f ($Domaine -replace '[^\w\.-]', '_'), (Get-Date -Format "yyyy-MM-dd_HH-mm"))

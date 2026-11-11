@@ -18,7 +18,7 @@ Il analyse un tenant et produit un **rapport HTML clair** (vert / orange / rouge
 
 Quand un contrôle ne peut pas être fait, il est marqué « non vérifiable » en précisant pourquoi : **licence manquante** dans le tenant (ex. PIM sans Entra ID P2) ou **droit manquant** pour le compte utilisé. Le bilan ne s'arrête jamais en route.
 
-À savoir : le réglage SMTP AUTH lui-même (par boîte ou pour le tenant) ne se lit qu'avec le module Exchange Online. Le Bilan 365 reste en Graph seul et en lecture seule : il montre donc l'**usage réel** (connexions SMTP authentifiées dans le journal des connexions Entra), ce qui suffit à savoir si on peut le couper sans rien casser.
+À savoir : le réglage SMTP AUTH lui-même (par boîte ou pour le tenant) ne se lit qu'avec le module Exchange Online. Le Bilan 365 reste en Graph seul et en lecture seule : il montre donc l'**usage réel** (connexions SMTP authentifiées dans le journal des connexions Entra), avec la **période réellement analysée** : 30 jours avec Entra ID P1/P2, 7 jours seulement sans (dans ce cas, jamais de conclusion « on peut couper »). Les comptes qui ressemblent à un copieur, un scanner ou une application (scan vers mail) sont signalés avec leur adresse IP : c'est le premier truc qui casse quand on coupe.
 
 ## Lancer le bilan
 
@@ -59,6 +59,7 @@ Un bilan de PC Windows, gratuit lui aussi : **[Bilan express](https://github.com
 
 ## Nouveautés
 
+- **1.3.1** : SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal, période réellement analysée affichée (7 jours sans P1 = résultat non concluant, jamais un faux « aucune connexion »), comptes de copieur / scanner / application repérés avec leur adresse IP. Merci encore à Ludo1377.
 - **1.3.0** : licences sur comptes désactivés, mot de passe oublié en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence manquante et droit manquant. Merci à Ludo1377 (r/Sysadmin_Fr) pour les idées.
 - **1.2.0** : licences en dépassement et abonnements en alerte, stockage SharePoint + OneDrive utilisé. Merci à ppx32 (r/Sysadmin_Fr) pour les idées. Le quota de stockage du tenant n'est pas lisible en lecture seule : à comparer dans le centre d'administration SharePoint.
 - **1.1.0** : première version publique.
