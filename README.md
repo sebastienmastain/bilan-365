@@ -13,7 +13,7 @@ Il analyse un tenant et produit un **rapport HTML clair** (vert / orange / rouge
 |---|---|
 | Comptes | Administrateurs généraux (trop ou pas assez), rôles admin permanents ou éligibles (PIM), double authentification (admins compris), mot de passe oublié en libre-service (SSPR : qui y a droit, qui n'a aucune méthode, réglage côté admins), paramètres de sécurité par défaut ou accès conditionnel, comptes inactifs depuis 90 jours, invités externes, usage réel de SMTP AUTH sur 30 jours |
 | Postes | Inscription automatique dans Intune, utilisateurs administrateurs de leur PC, LAPS activé et mot de passe sauvegardé pour chaque PC, chiffrement BitLocker, conformité, PC qui ne se synchronisent plus, règle de conformité, mises à jour Windows pilotées |
-| Licences | Licences payées mais attribuées à personne, licences restées sur des comptes désactivés, licences en dépassement, abonnements expirés (période de grâce) ou suspendus |
+| Licences | Licences attribuées à personne (les abonnements d'essai sont reconnus et ne sont pas comptés comme payés), licences restées sur des comptes désactivés, licences en dépassement, abonnements expirés (période de grâce) ou suspendus |
 | Stockage | Espace utilisé SharePoint (sites et Teams) + OneDrive, au total et par service |
 
 Quand un contrôle ne peut pas être fait, il est marqué « non vérifiable » en précisant pourquoi : **licence manquante** dans le tenant (ex. PIM sans Entra ID P2) ou **droit manquant** pour le compte utilisé. Le bilan ne s'arrête jamais en route.
@@ -59,6 +59,7 @@ Un bilan de PC Windows, gratuit lui aussi : **[Bilan express](https://github.com
 
 ## Nouveautés
 
+- **1.3.2** : licences d'essai reconnues. Une licence libre d'un abonnement d'essai n'est plus annoncée « payée » : elle est signalée « essai, gratuit jusqu'au … » et ne met plus le contrôle en orange. Même chose pour les comptes inactifs et les comptes désactivés.
 - **1.3.1** : SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal, période réellement analysée affichée (7 jours sans P1 = résultat non concluant, jamais un faux « aucune connexion »), comptes de copieur / scanner / application repérés avec leur adresse IP. Merci encore à Ludo1377.
 - **1.3.0** : licences sur comptes désactivés, mot de passe oublié en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence manquante et droit manquant. Merci à Ludo1377 (r/Sysadmin_Fr) pour les idées.
 - **1.2.0** : licences en dépassement et abonnements en alerte, stockage SharePoint + OneDrive utilisé. Merci à ppx32 (r/Sysadmin_Fr) pour les idées. Le quota de stockage du tenant n'est pas lisible en lecture seule : à comparer dans le centre d'administration SharePoint.

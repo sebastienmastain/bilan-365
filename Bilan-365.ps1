@@ -1,5 +1,5 @@
 ﻿<#PSScriptInfo
-.VERSION 1.3.1
+.VERSION 1.3.2
 .GUID 25ee63a4-b719-4f3c-a76b-7151bb4487ff
 .AUTHOR Pactio
 .COMPANYNAME Pactio
@@ -7,7 +7,7 @@
 .TAGS Microsoft365 M365 Intune Entra Audit Security Bilan French Sysadmin MSP
 .PROJECTURI https://github.com/sebastienmastain/bilan-365
 .REQUIREDMODULES Microsoft.Graph.Authentication
-.RELEASENOTES 1.3.1 - SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal des connexions, période réellement analysée affichée (7 jours sans P1 : jamais de conclusion « on peut couper »), comptes de copieur / scanner / application repérés avec leur adresse IP (retour de Ludo1377). Correction : nombre de PC, de règles de conformité, d'anneaux de mise à jour et d'accès conditionnel faux (et contrôle « PC qui ne donnent plus de nouvelles » en erreur) dès que le tenant en avait plusieurs. 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
+.RELEASENOTES 1.3.2 - licences d'essai reconnues (abonnements lus dans directory/subscriptions, même méthode que le Pack M365) : « Licences payées non attribuées » devient « Licences non attribuées », une licence libre d'essai est signalée « essai, gratuit jusqu'au JJ/MM/AAAA » et ne met pas le contrôle en orange ; « Licences sur comptes désactivés » et « Comptes inactifs » ne disent plus « payée » pour une licence d'essai. 1.3.1 - SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal des connexions, période réellement analysée affichée (7 jours sans P1 : jamais de conclusion « on peut couper »), comptes de copieur / scanner / application repérés avec leur adresse IP (retour de Ludo1377). Correction : nombre de PC, de règles de conformité, d'anneaux de mise à jour et d'accès conditionnel faux (et contrôle « PC qui ne donnent plus de nouvelles » en erreur) dès que le tenant en avait plusieurs. 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
 #>
 
 <#
@@ -32,7 +32,7 @@
     Compte administrateur du tenant (ex. admin@entreprise.fr). Sans ce paramètre, une fenêtre le demande.
 
 .NOTES
-    Pactio · Bilan 365 — v1.3.1 (gratuit)
+    Pactio · Bilan 365 — v1.3.2 (gratuit)
     Prérequis : Windows 10 / 11, PowerShell 5.1. Le module Microsoft.Graph.Authentication est
                 installé automatiquement pour l'utilisateur s'il manque.
     Droits    : un compte administrateur du tenant ; Microsoft demande d'accepter des droits de
@@ -132,6 +132,23 @@ if ($Skus) {
     $AvecP1 = @($Skus | Where-Object { $_.capabilityStatus -eq "Enabled" -and [int]$_.prepaidUnits.enabled -gt 0 } | ForEach-Object { $_.servicePlans } |
         Where-Object { $_.servicePlanName -match "^AAD_PREMIUM(_P2)?$" -and $_.provisioningStatus -ne "Disabled" }).Count -gt 0
 }
+# Abonnements d'essai (même méthode que le Pack M365, script 01) : gratuits tant que l'essai court.
+# Clé = skuId. Partiel = l'abonnement mélange essai et payant (les licences libres peuvent alors être payées).
+$Essais = @{}; $ErrEssais = $null
+if ($Skus) {
+    try {
+        $Subs = Lire-Tout "$G1/directory/subscriptions"
+        foreach ($S in $Skus) {
+            $Miens = @($Subs | Where-Object { "$($_.skuId)" -eq "$($S.skuId)" -and $_.status -ne "Deleted" })
+            $Essai = @($Miens | Where-Object { $_.isTrial }); $Payes = @($Miens | Where-Object { -not $_.isTrial })
+            if (-not $Essai.Count) { continue }
+            $Fins = @($Essai | Where-Object { $_.nextLifecycleDateTime } | ForEach-Object { [datetime]$_.nextLifecycleDateTime } | Sort-Object)
+            $Essais["$($S.skuId)"] = [pscustomobject]@{ Unites = [int](@($Essai | ForEach-Object { [int]$_.totalLicenses }) | Measure-Object -Sum).Sum; Fin = $(if ($Fins.Count) { $Fins[0] } else { $null }); Partiel = [bool]$Payes.Count }
+        }
+    } catch { $ErrEssais = $_ }
+}
+function EstEssai([string]$SkuId) { $Essais.ContainsKey($SkuId) -and -not $Essais[$SkuId].Partiel }
+function TexteEssai([string]$SkuId) { $E = $Essais[$SkuId]; "essai, gratuit" + $(if ($E.Fin) { " jusqu'au " + $E.Fin.ToString('dd/MM/yyyy') } else { " pour l'instant" }) }
 
 # ---- 1. Administrateurs généraux
 $Adm = @()
@@ -204,8 +221,11 @@ try {
             if ($U.createdDateTime -and ([datetime]$U.createdDateTime -gt $Il_y_a90)) { continue }   # compte récent : pas encore jugeable
             $Dates = @($U.signInActivity.lastSignInDateTime, $U.signInActivity.lastNonInteractiveSignInDateTime) | Where-Object { $_ } | ForEach-Object { [datetime]$_ }
             $Der = $Dates | Sort-Object -Descending | Select-Object -First 1
-            if (-not $Der) { $Inactifs += "$($U.userPrincipalName) : jamais connecté" + $(if ($U.assignedLicenses.Count) { " (licence payée)" } else { "" }) }
-            elseif ($Der -lt $Il_y_a90) { $Inactifs += "$($U.userPrincipalName) : dernière connexion le $($Der.ToString('dd/MM/yyyy'))" + $(if ($U.assignedLicenses.Count) { " (licence payée)" } else { "" }) }
+            # Licence du compte : « payée », sauf si toutes ses licences sont d'essai
+            $TxtLic = ""
+            if ($U.assignedLicenses.Count) { $TxtLic = if (@($U.assignedLicenses | Where-Object { -not (EstEssai "$($_.skuId)") }).Count) { " (licence payée)" } else { " (licence d'essai)" } }
+            if (-not $Der) { $Inactifs += "$($U.userPrincipalName) : jamais connecté" + $TxtLic }
+            elseif ($Der -lt $Il_y_a90) { $Inactifs += "$($U.userPrincipalName) : dernière connexion le $($Der.ToString('dd/MM/yyyy'))" + $TxtLic }
         }
         if ($Inactifs.Count) { Ajouter "Comptes" "Comptes inactifs" "ORANGE" "$($Inactifs.Count) compte(s) actif(s) sans connexion depuis plus de 90 jours" "Bloquer les comptes des personnes parties : un compte oublié est une porte ouverte (et souvent une licence payée pour rien)." $Inactifs }
         else { Ajouter "Comptes" "Comptes inactifs" "OK" "aucun compte de plus de 90 jours resté sans connexion" }
@@ -335,10 +355,23 @@ try {
 try {
     if (-not $Skus) { throw $ErrSkus }
     $Libres = @($Skus | Where-Object { $_.capabilityStatus -eq "Enabled" -and ($_.prepaidUnits.enabled - $_.consumedUnits) -gt 0 -and $_.prepaidUnits.enabled -lt 10000 })
-    $TotLibres = 0; foreach ($S in $Libres) { $TotLibres += ($S.prepaidUnits.enabled - $S.consumedUnits) }
-    if ($Libres.Count) { Ajouter "Licences" "Licences payées non attribuées" "ORANGE" "$TotLibres licence(s) libre(s)" "Des licences payées chaque mois sans utilisateur : à réduire si personne n'arrive." @($Libres | ForEach-Object { "{0} : {1} libre(s) sur {2}" -f (NomLicence $_.skuPartNumber), ($_.prepaidUnits.enabled - $_.consumedUnits), $_.prepaidUnits.enabled }) }
-    else { Ajouter "Licences" "Licences payées non attribuées" "OK" "aucune licence libre" }
-} catch { Ajouter "Licences" "Licences payées non attribuées" "GRIS" (Raison $_) }
+    $TotLibres = 0; $TotEssai = 0
+    foreach ($S in $Libres) { $N = $S.prepaidUnits.enabled - $S.consumedUnits; $TotLibres += $N; if (EstEssai "$($S.skuId)") { $TotEssai += $N } }
+    $TotPayees = $TotLibres - $TotEssai
+    $Det = @($Libres | ForEach-Object {
+        $Ligne = "{0} : {1} libre(s) sur {2}" -f (NomLicence $_.skuPartNumber), ($_.prepaidUnits.enabled - $_.consumedUnits), $_.prepaidUnits.enabled
+        if (EstEssai "$($_.skuId)") { $Ligne += " ($(TexteEssai "$($_.skuId)"))" }
+        elseif ($Essais.ContainsKey("$($_.skuId)")) { $Ligne += " (abonnement en partie d'essai : une partie des licences libres peut être payée)" }
+        $Ligne })
+    $NomCtl = "Licences non attribuées"
+    $SansType = if ($ErrEssais) { " Le type des abonnements (essai ou payant) n'a pas pu être lu : une licence d'essai serait gratuite pour l'instant." } else { "" }
+    if (-not $Libres.Count) { Ajouter "Licences" $NomCtl "OK" "aucune licence libre" }
+    elseif ($TotPayees -eq 0) { Ajouter "Licences" $NomCtl "OK" "$TotLibres licence(s) libre(s), toutes d'essai (gratuites pour l'instant)" "Avant la fin de l'essai : n'acheter que les licences réellement utilisées." $Det }
+    else {
+        $Txt = "$TotPayees licence(s) libre(s) payée(s)" + $(if ($TotEssai) { ", plus $TotEssai d'essai (gratuites pour l'instant)" } else { "" })
+        Ajouter "Licences" $NomCtl "ORANGE" $Txt ("Des licences payées chaque mois sans utilisateur : à réduire si personne n'arrive." + $SansType) $Det
+    }
+} catch { Ajouter "Licences" "Licences non attribuées" "GRIS" (Raison $_) }
 
 # ---- 9b. Licences attribuées à des comptes désactivés
 try {
@@ -346,9 +379,15 @@ try {
     $NomParId = @{}; if ($Skus) { foreach ($S in $Skus) { $NomParId["$($S.skuId)"] = NomLicence $S.skuPartNumber } }
     $Bloques = @($Us | Where-Object { -not $_.accountEnabled -and $_.assignedLicenses.Count })
     $NbLic = 0; foreach ($U in $Bloques) { $NbLic += $U.assignedLicenses.Count }
+    $NbEssai = 0; foreach ($U in $Bloques) { foreach ($A in $U.assignedLicenses) { if (EstEssai "$($A.skuId)") { $NbEssai++ } } }
     if ($Bloques.Count) {
-        Ajouter "Licences" "Licences sur comptes désactivés" "ORANGE" "$($Bloques.Count) compte(s) désactivé(s) gardent $NbLic licence(s)" "Licences payées pour des comptes bloqués : les retirer (sauf besoin voulu, ex. boîte partagée de plus de 50 Go ou archivage)." @($Bloques | ForEach-Object {
-            $L = @($_.assignedLicenses | ForEach-Object { if ($NomParId.ContainsKey("$($_.skuId)")) { $NomParId["$($_.skuId)"] } else { "$($_.skuId)" } }) -join ", "
+        $DebutConseil = if ($NbEssai -eq $NbLic) { "Licences d'essai (gratuites pour l'instant) attribuées à des comptes bloqués" }
+                 elseif ($NbEssai) { "Licences payées ($NbEssai d'essai, gratuites pour l'instant) pour des comptes bloqués" }
+                 else { "Licences payées pour des comptes bloqués" }
+        Ajouter "Licences" "Licences sur comptes désactivés" "ORANGE" "$($Bloques.Count) compte(s) désactivé(s) gardent $NbLic licence(s)" "$DebutConseil : les retirer (sauf besoin voulu, ex. boîte partagée de plus de 50 Go ou archivage)." @($Bloques | ForEach-Object {
+            $L = @($_.assignedLicenses | ForEach-Object {
+                $Nom = if ($NomParId.ContainsKey("$($_.skuId)")) { $NomParId["$($_.skuId)"] } else { "$($_.skuId)" }
+                if (EstEssai "$($_.skuId)") { "$Nom ($(TexteEssai "$($_.skuId)"))" } else { $Nom } }) -join ", "
             "$($_.userPrincipalName) : $L" })
     } else { Ajouter "Licences" "Licences sur comptes désactivés" "OK" "aucun compte désactivé ne garde de licence" }
 } catch { Ajouter "Licences" "Licences sur comptes désactivés" "GRIS" (Raison $_) }
@@ -432,7 +471,7 @@ a{color:#1F3A5F}
 <p class="verdict">$Verdict</p>
 $Lignes
 </main>
-<footer>Bilan 365 v1.3.1 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
+<footer>Bilan 365 v1.3.2 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
 </body></html>
 "@
 $Sortie = Join-Path ([Environment]::GetFolderPath("Desktop")) ("Bilan365_{0}_{1}.html" -f ($Domaine -replace '[^\w\.-]', '_'), (Get-Date -Format "yyyy-MM-dd_HH-mm"))
