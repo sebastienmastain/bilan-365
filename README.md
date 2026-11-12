@@ -53,6 +53,8 @@ Prérequis : Windows 10 ou 11, PowerShell 5.1, un compte administrateur du tenan
 
 ## Aller plus loin
 
+Le Bilan 365 fait le tour du tenant en lecture seule. Le **[Pack Scripts M365 & Intune](https://pactiofr.gumroad.com/l/pack-scripts-m365)** (29 €) va plus loin, avec 6 scripts : audit détaillé des licences (économies possibles), audit de sécurité noté sur 100 avec lien direct vers chaque fiche Entra, inventaire du parc Intune, suivi de Windows Update, et des procédures PDF illustrées.
+
 Les autres outils Pactio (bilan de PC, GPO pour TPE, scripts Microsoft 365 et Intune, contrats de maintenance) : **[pactiofr.gumroad.com](https://pactiofr.gumroad.com)**
 
 Un bilan de PC Windows, gratuit lui aussi : **[Bilan express](https://github.com/sebastienmastain/bilan-express)**
