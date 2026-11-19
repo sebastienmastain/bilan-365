@@ -1,0 +1,15 @@
+﻿PACTIO – LICENCE D'UTILISATION (OUTIL GRATUIT)
+© 2026 Sébastien Mastain. Tous droits réservés. Diffusé sous la marque Pactio.
+
+Ce que vous pouvez faire :
+- utiliser cet outil gratuitement, pour vous-même et chez vos clients ;
+- l'adapter pour vos besoins ;
+- remettre à vos clients les rapports produits.
+
+Ce qui est interdit :
+- le revendre, seul ou dans une offre payante ;
+- le redistribuer ailleurs que depuis ses pages officielles (GitHub sebastienmastain, PowerShell Gallery Pactio, pactiofr.gumroad.com) ;
+- retirer ou modifier les mentions de copyright.
+
+Fourni en l'état, à tester sur un périmètre restreint avant un usage général.
+Contact : contact@serenit38.fr

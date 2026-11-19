@@ -61,6 +61,7 @@ Un bilan de PC Windows, gratuit lui aussi : **[Bilan express](https://github.com
 
 ## Nouveautés
 
+- **1.3.3** : mention de copyright dans le script et ajout de `LICENCE.txt` (aucun changement du bilan).
 - **1.3.2** : licences d'essai reconnues. Une licence libre d'un abonnement d'essai n'est plus annoncée « payée » : elle est signalée « essai, gratuit jusqu'au … » et ne met plus le contrôle en orange. Même chose pour les comptes inactifs et les comptes désactivés.
 - **1.3.1** : SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal, période réellement analysée affichée (7 jours sans P1 = résultat non concluant, jamais un faux « aucune connexion »), comptes de copieur / scanner / application repérés avec leur adresse IP. Merci encore à Ludo1377.
 - **1.3.0** : licences sur comptes désactivés, mot de passe oublié en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence manquante et droit manquant. Merci à Ludo1377 (r/Sysadmin_Fr) pour les idées.
@@ -69,6 +70,9 @@ Un bilan de PC Windows, gratuit lui aussi : **[Bilan express](https://github.com
 
 ## Licence
 
-Usage libre, y compris chez vos clients. Redistribution interdite. Fourni en l'état.
+Gratuit, usage libre y compris chez vos clients. Revente et redistribution interdites (détail dans `LICENCE.txt`). Fourni en l'état.
 
 Pactio est un nom commercial de Sébastien Mastain EI, administrateur systèmes et réseaux depuis 27 ans (Isère).
+
+---
+© 2026 Sébastien Mastain. Tous droits réservés. Diffusé sous la marque Pactio.
