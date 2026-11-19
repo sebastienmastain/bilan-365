@@ -1,5 +1,5 @@
 ﻿<#PSScriptInfo
-.VERSION 1.3.3
+.VERSION 1.3.4
 .GUID 25ee63a4-b719-4f3c-a76b-7151bb4487ff
 .AUTHOR Pactio
 .COMPANYNAME Pactio
@@ -7,7 +7,7 @@
 .TAGS Microsoft365 M365 Intune Entra Audit Security Bilan French Sysadmin MSP
 .PROJECTURI https://github.com/sebastienmastain/bilan-365
 .REQUIREDMODULES Microsoft.Graph.Authentication
-.RELEASENOTES 1.3.3 - mention de copyright et licence ajoutées (aucun changement du bilan). 1.3.2 - licences d'essai reconnues (abonnements lus dans directory/subscriptions, même méthode que le Pack M365) : « Licences payées non attribuées » devient « Licences non attribuées », une licence libre d'essai est signalée « essai, gratuit jusqu'au JJ/MM/AAAA » et ne met pas le contrôle en orange ; « Licences sur comptes désactivés » et « Comptes inactifs » ne disent plus « payée » pour une licence d'essai. 1.3.1 - SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal des connexions, période réellement analysée affichée (7 jours sans P1 : jamais de conclusion « on peut couper »), comptes de copieur / scanner / application repérés avec leur adresse IP (retour de Ludo1377). Correction : nombre de PC, de règles de conformité, d'anneaux de mise à jour et d'accès conditionnel faux (et contrôle « PC qui ne donnent plus de nouvelles » en erreur) dès que le tenant en avait plusieurs. 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
+.RELEASENOTES 1.3.4 - changement interne sans effet pour l'utilisateur (enchaînement avec d'autres outils Pactio sans se reconnecter). 1.3.3 - mention de copyright et licence ajoutées. 1.3.2 - licences d'essai reconnues (abonnements lus dans directory/subscriptions, même méthode que le Pack M365) : « Licences payées non attribuées » devient « Licences non attribuées », une licence libre d'essai est signalée « essai, gratuit jusqu'au JJ/MM/AAAA » et ne met pas le contrôle en orange ; « Licences sur comptes désactivés » et « Comptes inactifs » ne disent plus « payée » pour une licence d'essai. 1.3.1 - SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal des connexions, période réellement analysée affichée (7 jours sans P1 : jamais de conclusion « on peut couper »), comptes de copieur / scanner / application repérés avec leur adresse IP (retour de Ludo1377). Correction : nombre de PC, de règles de conformité, d'anneaux de mise à jour et d'accès conditionnel faux (et contrôle « PC qui ne donnent plus de nouvelles » en erreur) dès que le tenant en avait plusieurs. 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
 #>
 
 <#
@@ -32,7 +32,7 @@
     Compte administrateur du tenant (ex. admin@entreprise.fr). Sans ce paramètre, une fenêtre le demande.
 
 .NOTES
-    Pactio · Bilan 365 — v1.3.3 (gratuit)
+    Pactio · Bilan 365 — v1.3.4 (gratuit)
     Prérequis : Windows 10 / 11, PowerShell 5.1. Le module Microsoft.Graph.Authentication est
                 installé automatiquement pour l'utilisateur s'il manque.
     Droits    : un compte administrateur du tenant ; Microsoft demande d'accepter des droits de
@@ -51,11 +51,14 @@
 param([string]$Compte)
 
 $ErrorActionPreference = "Stop"
+# Mode chef d'orchestre (État des lieux 365) : connexion, question et ouverture du rapport faites par l'orchestre
+$Orchestre = ($env:PACTIO_ORCHESTRE -eq '1')
 Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 $Police = New-Object System.Drawing.Font("Segoe UI", 10)
 
 # ================= Compte administrateur =================
+if ($Orchestre -and -not $Compte) { $Compte = (Get-MgContext).Account }
 if (-not $Compte) {
     $Fd = New-Object System.Windows.Forms.Form
     $Fd.Text = "Pactio - Bilan 365 (lecture seule)"; $Fd.Size = New-Object System.Drawing.Size(540, 240); $Fd.StartPosition = "CenterScreen"
@@ -82,10 +85,12 @@ Import-Module Microsoft.Graph.Authentication
 $Droits = @("Directory.Read.All", "AuditLog.Read.All", "Policy.Read.All", "Policy.Read.DeviceConfiguration",
             "DeviceManagementManagedDevices.Read.All", "DeviceManagementConfiguration.Read.All", "DeviceLocalCredential.ReadBasic.All",
             "Reports.Read.All", "RoleManagement.Read.Directory")
+if (-not $Orchestre) {
 Write-Host "Connexion : choisissez le compte $Compte (la fenêtre Microsoft peut être cachée : Alt+Tab)." -ForegroundColor Cyan
 Connect-MgGraph -TenantId $Domaine -Scopes $Droits -NoWelcome
+}
 $Ctx = Get-MgContext
-if ($Ctx.Account -ne $Compte) {
+if (-not $Orchestre -and $Ctx.Account -ne $Compte) {
     [void][System.Windows.Forms.MessageBox]::Show("Vous êtes connecté avec $($Ctx.Account) au lieu de $Compte.`r`nRelancez et choisissez le bon compte.", "Mauvais compte", "OK", "Error")
     & { $WarningPreference = "SilentlyContinue"; Disconnect-MgGraph -ErrorAction SilentlyContinue 3>$null | Out-Null }; return
 }
@@ -433,7 +438,7 @@ try {
     }
 } catch { Ajouter "Stockage" "Stockage SharePoint + OneDrive" "GRIS" (Raison $_) }
 
-try { & { $WarningPreference = "SilentlyContinue"; Disconnect-MgGraph -ErrorAction SilentlyContinue 3>$null | Out-Null } } catch { }
+if (-not $Orchestre) { try { & { $WarningPreference = "SilentlyContinue"; Disconnect-MgGraph -ErrorAction SilentlyContinue 3>$null | Out-Null } } catch { } }
 
 # ================= Rapport HTML =================
 function E([string]$T) { [System.Net.WebUtility]::HtmlEncode($T) }
@@ -478,12 +483,13 @@ a{color:#1F3A5F}
 <p class="verdict">$Verdict</p>
 $Lignes
 </main>
-<footer>Bilan 365 v1.3.3 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
+<footer>Bilan 365 v1.3.4 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
 </body></html>
 "@
-$Sortie = Join-Path ([Environment]::GetFolderPath("Desktop")) ("Bilan365_{0}_{1}.html" -f ($Domaine -replace '[^\w\.-]', '_'), (Get-Date -Format "yyyy-MM-dd_HH-mm"))
+$DossierSortie = if ($Orchestre) { (Get-Location).Path } else { [Environment]::GetFolderPath("Desktop") }
+$Sortie = Join-Path $DossierSortie ("Bilan365_{0}_{1}.html" -f ($Domaine -replace '[^\w\.-]', '_'), (Get-Date -Format "yyyy-MM-dd_HH-mm"))
 [System.IO.File]::WriteAllText($Sortie, $Html, (New-Object System.Text.UTF8Encoding($true)))
 Write-Host ""
 Write-Host ("Résultat : {0} OK, {1} à améliorer, {2} risque(s), {3} non vérifiable(s)" -f $NbOK, $NbOr, $NbRo, $NbGr) -ForegroundColor Cyan
 Write-Host "Rapport : $Sortie" -ForegroundColor Cyan
-Start-Process $Sortie
+if (-not $Orchestre) { Start-Process $Sortie }
