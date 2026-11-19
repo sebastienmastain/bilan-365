@@ -61,6 +61,7 @@ Un bilan de PC Windows, gratuit lui aussi : **[Bilan express](https://github.com
 
 ## Nouveautés
 
+- **1.3.5** : SMTP AUTH : à côté de chaque compte, le rapport affiche l'appareil annoncé par le client d'envoi (souvent le modèle du copieur, par exemple « RICOH IM C3000 ») et s'en sert pour repérer les copieurs. Merci à Ludo1377 pour l'idée.
 - **1.3.4** : changement interne, sans effet pour l'utilisateur (le bilan peut être enchaîné avec d'autres outils Pactio sans se reconnecter).
 - **1.3.3** : mention de copyright dans le script et ajout de `LICENCE.txt` (aucun changement du bilan).
 - **1.3.2** : licences d'essai reconnues. Une licence libre d'un abonnement d'essai n'est plus annoncée « payée » : elle est signalée « essai, gratuit jusqu'au … » et ne met plus le contrôle en orange. Même chose pour les comptes inactifs et les comptes désactivés.
