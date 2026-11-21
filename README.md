@@ -11,9 +11,9 @@ Il analyse un tenant et produit un **rapport HTML clair** (vert / orange / rouge
 
 | Thème | Contrôles |
 |---|---|
-| Comptes | Administrateurs généraux (trop ou pas assez), rôles admin permanents ou éligibles (PIM), double authentification (admins compris), mot de passe oublié en libre-service (SSPR : qui y a droit, qui n'a aucune méthode, réglage côté admins), paramètres de sécurité par défaut ou accès conditionnel, comptes inactifs depuis 90 jours, invités externes, usage réel de SMTP AUTH sur 30 jours |
+| Comptes | Administrateurs généraux (trop ou pas assez), rôles admin permanents ou éligibles (PIM), double authentification (admins compris), mot de passe oublié en libre-service (SSPR : qui y a droit, qui n'a aucune méthode, réglage côté admins), paramètres de sécurité par défaut ou accès conditionnel, comptes inactifs depuis 90 jours, invités externes, groupes sans propriétaire actif (groupes Microsoft 365, équipes Teams, groupes de sécurité cloud), usage réel de SMTP AUTH sur 30 jours |
 | Postes | Inscription automatique dans Intune, utilisateurs administrateurs de leur PC, LAPS activé et mot de passe sauvegardé pour chaque PC, chiffrement BitLocker, conformité, PC qui ne se synchronisent plus, règle de conformité, mises à jour Windows pilotées |
-| Licences | Licences attribuées à personne (les abonnements d'essai sont reconnus et ne sont pas comptés comme payés), licences restées sur des comptes désactivés, licences en dépassement, abonnements expirés (période de grâce) ou suspendus |
+| Licences | Licences attribuées à personne (les abonnements d'essai sont reconnus et ne sont pas comptés comme payés), licences restées sur des comptes désactivés, comptes sous licence sans connexion depuis 30 jours, licences en dépassement, abonnements expirés (période de grâce) ou suspendus |
 | Stockage | Espace utilisé SharePoint (sites et Teams) + OneDrive, au total et par service |
 
 Quand un contrôle ne peut pas être fait, il est marqué « non vérifiable » en précisant pourquoi : **licence manquante** dans le tenant (ex. PIM sans Entra ID P2) ou **droit manquant** pour le compte utilisé. Le bilan ne s'arrête jamais en route.
@@ -61,6 +61,7 @@ Un bilan de PC Windows, gratuit lui aussi : **[Bilan express](https://github.com
 
 ## Nouveautés
 
+- **1.4.0** : deux contrôles en plus. Les groupes sans propriétaire actif (aucun propriétaire, ou seulement des comptes désactivés) : ceux qu'on ne retrouve jamais quand il faut changer un accès. Et les comptes actifs sous licence qui ne se sont pas connectés depuis 30 jours. Merci à Ludo1377 pour les deux idées.
 - **1.3.5** : SMTP AUTH : à côté de chaque compte, le rapport affiche l'appareil annoncé par le client d'envoi (souvent le modèle du copieur, par exemple « RICOH IM C3000 ») et s'en sert pour repérer les copieurs. Merci à Ludo1377 pour l'idée.
 - **1.3.4** : changement interne, sans effet pour l'utilisateur (le bilan peut être enchaîné avec d'autres outils Pactio sans se reconnecter).
 - **1.3.3** : mention de copyright dans le script et ajout de `LICENCE.txt` (aucun changement du bilan).

@@ -1,5 +1,5 @@
 ﻿<#PSScriptInfo
-.VERSION 1.3.5
+.VERSION 1.4.0
 .GUID 25ee63a4-b719-4f3c-a76b-7151bb4487ff
 .AUTHOR Pactio
 .COMPANYNAME Pactio
@@ -7,7 +7,7 @@
 .TAGS Microsoft365 M365 Intune Entra Audit Security Bilan French Sysadmin MSP
 .PROJECTURI https://github.com/sebastienmastain/bilan-365
 .REQUIREDMODULES Microsoft.Graph.Authentication
-.RELEASENOTES 1.3.5 - SMTP AUTH : l'appareil annoncé par le client SMTP (souvent le modèle du copieur, ex. « RICOH IM C3000 ») est affiché à côté du compte et sert à repérer les copieurs (idée de Ludo1377). 1.3.4 - changement interne sans effet pour l'utilisateur (enchaînement avec d'autres outils Pactio sans se reconnecter). 1.3.3 - mention de copyright et licence ajoutées. 1.3.2 - licences d'essai reconnues (abonnements lus dans directory/subscriptions, même méthode que le Pack M365) : « Licences payées non attribuées » devient « Licences non attribuées », une licence libre d'essai est signalée « essai, gratuit jusqu'au JJ/MM/AAAA » et ne met pas le contrôle en orange ; « Licences sur comptes désactivés » et « Comptes inactifs » ne disent plus « payée » pour une licence d'essai. 1.3.1 - SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal des connexions, période réellement analysée affichée (7 jours sans P1 : jamais de conclusion « on peut couper »), comptes de copieur / scanner / application repérés avec leur adresse IP (retour de Ludo1377). Correction : nombre de PC, de règles de conformité, d'anneaux de mise à jour et d'accès conditionnel faux (et contrôle « PC qui ne donnent plus de nouvelles » en erreur) dès que le tenant en avait plusieurs. 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
+.RELEASENOTES 1.4.0 - deux contrôles en plus (idées de Ludo1377) : groupes Microsoft 365, équipes Teams et groupes de sécurité cloud sans propriétaire actif ; comptes actifs sous licence sans connexion depuis 30 jours. 1.3.5 - SMTP AUTH : l'appareil annoncé par le client SMTP (souvent le modèle du copieur, ex. « RICOH IM C3000 ») est affiché à côté du compte et sert à repérer les copieurs (idée de Ludo1377). 1.3.4 - changement interne sans effet pour l'utilisateur (enchaînement avec d'autres outils Pactio sans se reconnecter). 1.3.3 - mention de copyright et licence ajoutées. 1.3.2 - licences d'essai reconnues (abonnements lus dans directory/subscriptions, même méthode que le Pack M365) : « Licences payées non attribuées » devient « Licences non attribuées », une licence libre d'essai est signalée « essai, gratuit jusqu'au JJ/MM/AAAA » et ne met pas le contrôle en orange ; « Licences sur comptes désactivés » et « Comptes inactifs » ne disent plus « payée » pour une licence d'essai. 1.3.1 - SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal des connexions, période réellement analysée affichée (7 jours sans P1 : jamais de conclusion « on peut couper »), comptes de copieur / scanner / application repérés avec leur adresse IP (retour de Ludo1377). Correction : nombre de PC, de règles de conformité, d'anneaux de mise à jour et d'accès conditionnel faux (et contrôle « PC qui ne donnent plus de nouvelles » en erreur) dès que le tenant en avait plusieurs. 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
 #>
 
 <#
@@ -22,17 +22,19 @@
 
     Vérifie : administrateurs généraux, rôles admin permanents ou éligibles (PIM), double
     authentification (admins compris), réinitialisation du mot de passe en libre-service, paramètres
-    de sécurité par défaut ou accès conditionnel, comptes inactifs, invités, usage de SMTP AUTH,
+    de sécurité par défaut ou accès conditionnel, comptes inactifs, invités, groupes sans propriétaire,
+    usage de SMTP AUTH,
     inscription automatique dans Intune, utilisateurs administrateurs de leur PC, LAPS, chiffrement
     BitLocker, conformité et synchronisation des PC, règle de conformité, mises à jour Windows
-    pilotées, licences libres, licences sur comptes désactivés, licences en dépassement ou
+    pilotées, licences libres, licences sur comptes désactivés, comptes sous licence inactifs depuis
+    30 jours, licences en dépassement ou
     abonnements en alerte, stockage SharePoint + OneDrive utilisé.
 
 .PARAMETER Compte
     Compte administrateur du tenant (ex. admin@entreprise.fr). Sans ce paramètre, une fenêtre le demande.
 
 .NOTES
-    Pactio · Bilan 365 — v1.3.5 (gratuit)
+    Pactio · Bilan 365 — v1.4.0 (gratuit)
     Prérequis : Windows 10 / 11, PowerShell 5.1. Le module Microsoft.Graph.Authentication est
                 installé automatiquement pour l'utilisateur s'il manque.
     Droits    : un compte administrateur du tenant ; Microsoft demande d'accepter des droits de
@@ -228,9 +230,9 @@ try {
     $Invites = @($Us | Where-Object { $_.userType -eq "Guest" })
     if (-not $AvecConnexion) { Ajouter "Comptes" "Comptes inactifs" "GRIS" ("date de dernière connexion " + (Raison $ErrConnexion)) }
     else {
-        $Inactifs = @()
+        $Inactifs = @(); $Recents90 = 0
         foreach ($U in $Actifs) {
-            if ($U.createdDateTime -and ([datetime]$U.createdDateTime -gt $Il_y_a90)) { continue }   # compte récent : pas encore jugeable
+            if ($U.createdDateTime -and ([datetime]$U.createdDateTime -gt $Il_y_a90)) { $Recents90++; continue }   # compte récent : pas encore jugeable
             $Dates = @($U.signInActivity.lastSignInDateTime, $U.signInActivity.lastNonInteractiveSignInDateTime) | Where-Object { $_ } | ForEach-Object { [datetime]$_ }
             $Der = $Dates | Sort-Object -Descending | Select-Object -First 1
             # Licence du compte : « payée », sauf si toutes ses licences sont d'essai
@@ -240,7 +242,7 @@ try {
             elseif ($Der -lt $Il_y_a90) { $Inactifs += "$($U.userPrincipalName) : dernière connexion le $($Der.ToString('dd/MM/yyyy'))" + $TxtLic }
         }
         if ($Inactifs.Count) { Ajouter "Comptes" "Comptes inactifs" "ORANGE" "$($Inactifs.Count) compte(s) actif(s) sans connexion depuis plus de 90 jours" "Bloquer les comptes des personnes parties : un compte oublié est une porte ouverte (et souvent une licence payée pour rien)." $Inactifs }
-        else { Ajouter "Comptes" "Comptes inactifs" "OK" "aucun compte de plus de 90 jours resté sans connexion" }
+        else { Ajouter "Comptes" "Comptes inactifs" "OK" ("aucun compte de plus de 90 jours resté sans connexion" + $(if ($Recents90) { " ($Recents90 compte(s) créé(s) il y a moins de 90 jours, pas encore jugé(s))" } else { "" })) }
     }
     if ($Invites.Count) { Ajouter "Comptes" "Invités externes" "ORANGE" "$($Invites.Count) invité(s) externe(s)" "Vérifier qu'ils ont encore besoin d'accès." @($Invites | ForEach-Object { $_.userPrincipalName }) }
     else { Ajouter "Comptes" "Invités externes" "OK" "aucun invité externe" }
@@ -312,6 +314,30 @@ try {
     if ("$($_.Exception.Message)" -like "licence : *") { Ajouter "Comptes" $NomSmtp "GRIS" ("non vérifiable : " + "$($_.Exception.Message)".Substring(10)) "Sans journal des connexions, impossible de savoir qui utilise SMTP AUTH : ne pas le couper à l'aveugle (copieur, logiciels métier)." }
     else { Ajouter "Comptes" $NomSmtp "GRIS" (Raison $_) }
 }
+
+# ---- 4d. Groupes sans propriétaire (idée de Ludo1377)
+try {
+    try { $Grp = Lire-Tout "$G1/groups?`$select=id,displayName,groupTypes,mailEnabled,securityEnabled,onPremisesSyncEnabled,resourceProvisioningOptions&`$expand=owners(`$select=id)" }
+    catch {   # repli : propriétaires lus groupe par groupe
+        $Grp = Lire-Tout "$G1/groups?`$select=id,displayName,groupTypes,mailEnabled,securityEnabled,onPremisesSyncEnabled,resourceProvisioningOptions"
+        foreach ($Gr in $Grp) { $Gr.owners = @(Lire-Tout "$G1/groups/$($Gr.id)/owners?`$select=id") }
+    }
+    # Groupes gérés dans 365 : groupes Microsoft 365 (et équipes Teams) + groupes de sécurité cloud.
+    # Exclus : groupes venant de l'AD (gérés dans l'AD) et listes de diffusion (gérées dans Exchange).
+    $Cloud = @($Grp | Where-Object { -not $_.onPremisesSyncEnabled -and ((@($_.groupTypes) -contains "Unified") -or ($_.securityEnabled -and -not $_.mailEnabled)) })
+    $EtatCompte = @{}; if ($Us) { foreach ($U in $Us) { $EtatCompte["$($U.id)"] = [bool]$U.accountEnabled } }
+    $SansProp = @()
+    foreach ($Gr in $Cloud) {
+        $Type = if (@($Gr.groupTypes) -contains "Unified") { if (@($Gr.resourceProvisioningOptions) -contains "Team") { "équipe Teams" } else { "groupe Microsoft 365" } } else { "groupe de sécurité" }
+        $Prop = @($Gr.owners | Where-Object { $_ -and $_.id })
+        $Actifs2 = @($Prop | Where-Object { -not $EtatCompte.ContainsKey("$($_.id)") -or $EtatCompte["$($_.id)"] })
+        if (-not $Prop.Count) { $SansProp += "$($Gr.displayName) ($Type) : aucun propriétaire" }
+        elseif (-not $Actifs2.Count) { $SansProp += "$($Gr.displayName) ($Type) : $($Prop.Count) propriétaire(s), tous avec un compte désactivé" }
+    }
+    if (-not $Cloud.Count) { Ajouter "Comptes" "Groupes sans propriétaire" "OK" "aucun groupe Microsoft 365 ou de sécurité géré dans le cloud" }
+    elseif ($SansProp.Count) { Ajouter "Comptes" "Groupes sans propriétaire" "ORANGE" "$($SansProp.Count) groupe(s) sur $($Cloud.Count) sans propriétaire actif" "Nommer au moins un propriétaire (idéalement deux) par groupe : c'est lui qui sait qui doit y avoir accès. Sans propriétaire, personne ne valide les accès et seul l'administrateur peut gérer le groupe." $SansProp }
+    else { Ajouter "Comptes" "Groupes sans propriétaire" "OK" "les $($Cloud.Count) groupe(s) gérés dans le cloud ont au moins un propriétaire actif" }
+} catch { Ajouter "Comptes" "Groupes sans propriétaire" "GRIS" (Raison $_) }
 
 # ---- 5. Inscription automatique Intune
 try {
@@ -411,6 +437,33 @@ try {
     } else { Ajouter "Licences" "Licences sur comptes désactivés" "OK" "aucun compte désactivé ne garde de licence" }
 } catch { Ajouter "Licences" "Licences sur comptes désactivés" "GRIS" (Raison $_) }
 
+# ---- 9c. Comptes sous licence qui ne se connectent plus depuis 30 jours (idée de Ludo1377)
+try {
+    if (-not $Us) { throw "liste des comptes non lue" }
+    if (-not $AvecConnexion) { Ajouter "Licences" "Comptes sous licence inactifs (30 jours)" "GRIS" ("date de dernière connexion " + (Raison $ErrConnexion)) }
+    else {
+        $Il_y_a30 = (Get-Date).AddDays(-30)
+        if (-not $NomParId) { $NomParId = @{}; if ($Skus) { foreach ($S in $Skus) { $NomParId["$($S.skuId)"] = NomLicence $S.skuPartNumber } } }
+        $Dormants = @(); $NbPayes = 0; $Recents30 = 0
+        foreach ($U in @($Us | Where-Object { $_.accountEnabled -and $_.userType -ne "Guest" -and $_.assignedLicenses.Count })) {
+            if ($U.createdDateTime -and ([datetime]$U.createdDateTime -gt $Il_y_a30)) { $Recents30++; continue }   # compte récent : pas encore jugeable
+            $Dates = @($U.signInActivity.lastSignInDateTime, $U.signInActivity.lastNonInteractiveSignInDateTime, $U.signInActivity.lastSuccessfulSignInDateTime) | Where-Object { $_ } | ForEach-Object { [datetime]$_ }
+            $Der = $Dates | Sort-Object -Descending | Select-Object -First 1
+            if ($Der -and $Der -ge $Il_y_a30) { continue }
+            $Payee = @($U.assignedLicenses | Where-Object { -not (EstEssai "$($_.skuId)") }).Count -gt 0
+            if ($Payee) { $NbPayes++ }
+            $L = @($U.assignedLicenses | ForEach-Object {
+                $Nom = if ($NomParId.ContainsKey("$($_.skuId)")) { $NomParId["$($_.skuId)"] } else { "$($_.skuId)" }
+                if (EstEssai "$($_.skuId)") { "$Nom (essai)" } else { $Nom } }) -join ", "
+            $Quand = if ($Der) { "dernière connexion le $($Der.ToString('dd/MM/yyyy')) ($([int]((Get-Date) - $Der).TotalDays) jours)" } else { "jamais connecté" }
+            $Dormants += "$($U.userPrincipalName) : $Quand - $L"
+        }
+        if ($NbPayes) { Ajouter "Licences" "Comptes sous licence inactifs (30 jours)" "ORANGE" "$($Dormants.Count) compte(s) actif(s) avec licence sans connexion depuis 30 jours ou plus" "Faire le point avec le responsable : personne partie (bloquer le compte, retirer la licence), absence longue, ou compte technique (une licence est-elle vraiment utile ?). Chaque licence dormante est payée chaque mois." $Dormants }
+        elseif ($Dormants.Count) { Ajouter "Licences" "Comptes sous licence inactifs (30 jours)" "OK" "$($Dormants.Count) compte(s) inactif(s) depuis 30 jours, avec seulement des licences d'essai (gratuites pour l'instant)" "Avant la fin de l'essai : ne pas acheter de licence pour ces comptes s'ils ne servent pas." $Dormants }
+        else { Ajouter "Licences" "Comptes sous licence inactifs (30 jours)" "OK" ("aucun compte sous licence resté 30 jours sans connexion" + $(if ($Recents30) { " ($Recents30 compte(s) créé(s) il y a moins de 30 jours, pas encore jugé(s))" } else { "" })) }
+    }
+} catch { Ajouter "Licences" "Comptes sous licence inactifs (30 jours)" "GRIS" (Raison $_) }
+
 # ---- 10. Licences en dépassement / abonnements en alerte
 try {
     if (-not $Skus) { throw $ErrSkus }
@@ -490,7 +543,7 @@ a{color:#1F3A5F}
 <p class="verdict">$Verdict</p>
 $Lignes
 </main>
-<footer>Bilan 365 v1.3.5 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
+<footer>Bilan 365 v1.4.0 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
 </body></html>
 "@
 $DossierSortie = if ($Orchestre) { (Get-Location).Path } else { [Environment]::GetFolderPath("Desktop") }
