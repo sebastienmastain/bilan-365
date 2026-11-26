@@ -1,5 +1,5 @@
 ﻿<#PSScriptInfo
-.VERSION 1.4.0
+.VERSION 1.4.2
 .GUID 25ee63a4-b719-4f3c-a76b-7151bb4487ff
 .AUTHOR Pactio
 .COMPANYNAME Pactio
@@ -7,7 +7,9 @@
 .TAGS Microsoft365 M365 Intune Entra Audit Security Bilan French Sysadmin MSP
 .PROJECTURI https://github.com/sebastienmastain/bilan-365
 .REQUIREDMODULES Microsoft.Graph.Authentication
-.RELEASENOTES 1.4.0 - deux contrôles en plus (idées de Ludo1377) : groupes Microsoft 365, équipes Teams et groupes de sécurité cloud sans propriétaire actif ; comptes actifs sous licence sans connexion depuis 30 jours. 1.3.5 - SMTP AUTH : l'appareil annoncé par le client SMTP (souvent le modèle du copieur, ex. « RICOH IM C3000 ») est affiché à côté du compte et sert à repérer les copieurs (idée de Ludo1377). 1.3.4 - changement interne sans effet pour l'utilisateur (enchaînement avec d'autres outils Pactio sans se reconnecter). 1.3.3 - mention de copyright et licence ajoutées. 1.3.2 - licences d'essai reconnues (abonnements lus dans directory/subscriptions, même méthode que le Pack M365) : « Licences payées non attribuées » devient « Licences non attribuées », une licence libre d'essai est signalée « essai, gratuit jusqu'au JJ/MM/AAAA » et ne met pas le contrôle en orange ; « Licences sur comptes désactivés » et « Comptes inactifs » ne disent plus « payée » pour une licence d'essai. 1.3.1 - SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal des connexions, période réellement analysée affichée (7 jours sans P1 : jamais de conclusion « on peut couper »), comptes de copieur / scanner / application repérés avec leur adresse IP (retour de Ludo1377). Correction : nombre de PC, de règles de conformité, d'anneaux de mise à jour et d'accès conditionnel faux (et contrôle « PC qui ne donnent plus de nouvelles » en erreur) dès que le tenant en avait plusieurs. 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
+.RELEASENOTES 1.4.2 - mention de droits en bas du rapport ; numéro de version du pied corrigé.
+1.4.1 - sécurité : le module Microsoft n'est plus installé sans accord (question O/N).
+1.4.0 - deux contrôles en plus (idées de Ludo1377) : groupes Microsoft 365, équipes Teams et groupes de sécurité cloud sans propriétaire actif ; comptes actifs sous licence sans connexion depuis 30 jours. 1.3.5 - SMTP AUTH : l'appareil annoncé par le client SMTP (souvent le modèle du copieur, ex. « RICOH IM C3000 ») est affiché à côté du compte et sert à repérer les copieurs (idée de Ludo1377). 1.3.4 - changement interne sans effet pour l'utilisateur (enchaînement avec d'autres outils Pactio sans se reconnecter). 1.3.3 - mention de copyright et licence ajoutées. 1.3.2 - licences d'essai reconnues (abonnements lus dans directory/subscriptions, même méthode que le Pack M365) : « Licences payées non attribuées » devient « Licences non attribuées », une licence libre d'essai est signalée « essai, gratuit jusqu'au JJ/MM/AAAA » et ne met pas le contrôle en orange ; « Licences sur comptes désactivés » et « Comptes inactifs » ne disent plus « payée » pour une licence d'essai. 1.3.1 - SMTP AUTH : licence Entra ID P1/P2 vérifiée avant de lire le journal des connexions, période réellement analysée affichée (7 jours sans P1 : jamais de conclusion « on peut couper »), comptes de copieur / scanner / application repérés avec leur adresse IP (retour de Ludo1377). Correction : nombre de PC, de règles de conformité, d'anneaux de mise à jour et d'accès conditionnel faux (et contrôle « PC qui ne donnent plus de nouvelles » en erreur) dès que le tenant en avait plusieurs. 1.3.0 - licences sur comptes désactivés, réinitialisation du mot de passe en libre-service (SSPR), rôles admin permanents ou éligibles (PIM), usage de SMTP AUTH sur 30 jours, « non vérifiable » qui distingue licence et droit manquants (idées de Ludo1377 sur r/Sysadmin_Fr). 1.2.0 - licences en dépassement ou abonnements en alerte, stockage SharePoint + OneDrive utilisé (idées de ppx32). 1.1.0 - première version publique.
 #>
 
 <#
@@ -34,7 +36,7 @@
     Compte administrateur du tenant (ex. admin@entreprise.fr). Sans ce paramètre, une fenêtre le demande.
 
 .NOTES
-    Pactio · Bilan 365 — v1.4.0 (gratuit)
+    Pactio · Bilan 365 — v1.4.2 (gratuit)
     Prérequis : Windows 10 / 11, PowerShell 5.1. Le module Microsoft.Graph.Authentication est
                 installé automatiquement pour l'utilisateur s'il manque.
     Droits    : un compte administrateur du tenant ; Microsoft demande d'accepter des droits de
@@ -80,7 +82,9 @@ $Domaine = ($Compte -split "@")[-1]
 
 # ================= Connexion (lecture seule) =================
 if (-not (Get-Module -ListAvailable -Name Microsoft.Graph.Authentication)) {
-    Write-Host "Installation du module Microsoft.Graph.Authentication (une seule fois)..." -ForegroundColor Yellow
+    # Jamais d'installation sans accord (sécurité, 1.4.1) : on demande, sinon on s'arrête avec la commande à taper
+    $rep = Read-Host 'Le module gratuit Microsoft.Graph.Authentication est absent. L''installer pour votre compte (PowerShell Gallery) ? (O/N)'
+    if ($rep -notmatch '^[oOyY]') { Write-Host 'Arrêt : module requis. Pour l''installer vous-même : Install-Module Microsoft.Graph.Authentication -Scope CurrentUser' -ForegroundColor Yellow; return }
     Install-Module Microsoft.Graph.Authentication -Scope CurrentUser -Force -AllowClobber
 }
 Import-Module Microsoft.Graph.Authentication
@@ -543,8 +547,8 @@ a{color:#1F3A5F}
 <p class="verdict">$Verdict</p>
 $Lignes
 </main>
-<footer>Bilan 365 v1.4.0 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
-</body></html>
+<footer>Bilan 365 v1.4.2 (gratuit) - Pactio. Pour corriger ces points en une fois (BitLocker, LAPS, administrateurs, OneDrive, sécurité, imprimantes) : <a href="https://pactiofr.gumroad.com">pactiofr.gumroad.com</a>.<br>Ce bilan donne une photographie à la date indiquée ; il ne remplace pas un audit complet.</footer>
+<p><small>&copy; 2026 S&eacute;bastien Mastain</small></p></body></html>
 "@
 $DossierSortie = if ($Orchestre) { (Get-Location).Path } else { [Environment]::GetFolderPath("Desktop") }
 $Sortie = Join-Path $DossierSortie ("Bilan365_{0}_{1}.html" -f ($Domaine -replace '[^\w\.-]', '_'), (Get-Date -Format "yyyy-MM-dd_HH-mm"))
